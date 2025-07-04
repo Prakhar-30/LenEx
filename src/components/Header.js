@@ -36,7 +36,7 @@ const Header = () => {
               to="/" 
               className="text-2xl font-cyber font-bold text-neon-green animate-glow hover:text-cyber-blue transition-colors"
             >
-              DeLex Protocol
+              Len-Ex Protocol
             </Link>
             
             {/* Desktop Navigation */}

@@ -78,14 +78,14 @@ const Home = () => {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-16">
           <div className="text-center">
             <h1 className="text-6xl md:text-8xl font-cyber font-bold text-neon-green mb-6 animate-glow">
-              DeLex Protocol
+              Len-Ex Protocol
             </h1>
             <p className="text-xl md:text-2xl text-cyber-blue mb-8 font-cyber">
-              Decentralized Lending + Exchange Protocol on BlockDAG
+              Decentralized Lending + Exchange Protocol on ETHEREUM
             </p>
             <p className="text-lg text-gray-300 mb-12 max-w-3xl mx-auto">
               Experience the future of DeFi with our unified protocol that combines 
-              AMM trading and lending capabilities, powered by BlockDAG's high-performance blockchain.
+              AMM trading and lending capabilities.
             </p>
             
             {!account ? (

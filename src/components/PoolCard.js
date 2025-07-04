@@ -1,34 +1,64 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { ethers } from 'ethers';
-import { MOCK_TOKENS } from '../contracts/MockToken';
+import { useToken } from '../hooks/useToken';
+import { useWallet } from '../hooks/useWallet';
 
 const PoolCard = ({ pool, onSelectPool, isSelected = false, showActions = true }) => {
-  const getTokenSymbol = (address) => {
-    return Object.keys(MOCK_TOKENS).find(key => 
-      MOCK_TOKENS[key].address === address
-    ) || 'Unknown';
+  const { signer } = useWallet();
+  const { fetchTokenInfo, isValidAddress } = useToken(signer);
+  
+  const [tokenAInfo, setTokenAInfo] = useState(null);
+  const [tokenBInfo, setTokenBInfo] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (pool && isValidAddress(pool.tokenA) && isValidAddress(pool.tokenB)) {
+      loadTokenInfo();
+    }
+  }, [pool, signer]);
+
+  const loadTokenInfo = async () => {
+    try {
+      setLoading(true);
+      const [tokenA, tokenB] = await Promise.all([
+        fetchTokenInfo(pool.tokenA),
+        fetchTokenInfo(pool.tokenB)
+      ]);
+      setTokenAInfo(tokenA);
+      setTokenBInfo(tokenB);
+    } catch (error) {
+      console.error('Error loading token info for pool:', error);
+    } finally {
+      setLoading(false);
+    }
   };
 
-  const formatAmount = (amount) => {
-    const formatted = parseFloat(ethers.utils.formatEther(amount));
+  const formatAmount = (amount, decimals = 18) => {
+    const formatted = parseFloat(ethers.utils.formatUnits(amount, decimals));
     return formatted.toFixed(4);
   };
 
   const calculateTVL = () => {
-    const reserveA = parseFloat(ethers.utils.formatEther(pool.reserveA));
-    const reserveB = parseFloat(ethers.utils.formatEther(pool.reserveB));
+    if (!tokenAInfo || !tokenBInfo) return '0.00';
+    
+    const reserveA = parseFloat(ethers.utils.formatUnits(pool.reserveA, tokenAInfo.decimals));
+    const reserveB = parseFloat(ethers.utils.formatUnits(pool.reserveB, tokenBInfo.decimals));
+    // Simplified: assuming both tokens have equal value for TVL calculation
     return (reserveA + reserveB).toFixed(2);
   };
 
   const calculateUtilization = (token) => {
+    if (!tokenAInfo || !tokenBInfo) return '0.00';
+    
     const isTokenA = token === 'A';
+    const tokenInfo = isTokenA ? tokenAInfo : tokenBInfo;
     const reserve = isTokenA ? pool.reserveA : pool.reserveB;
     const borrowed = isTokenA ? pool.totalBorrowedA : pool.totalBorrowedB;
     
     if (reserve.eq(0)) return '0.00';
     
-    const utilization = (parseFloat(ethers.utils.formatEther(borrowed)) / 
-                        parseFloat(ethers.utils.formatEther(reserve))) * 100;
+    const utilization = (parseFloat(ethers.utils.formatUnits(borrowed, tokenInfo.decimals)) / 
+                        parseFloat(ethers.utils.formatUnits(reserve, tokenInfo.decimals))) * 100;
     return Math.min(utilization, 100).toFixed(2);
   };
 
@@ -38,8 +68,33 @@ const PoolCard = ({ pool, onSelectPool, isSelected = false, showActions = true }
     return (parseFloat(ethers.utils.formatEther(rate))).toFixed(2);
   };
 
-  const tokenASymbol = getTokenSymbol(pool.tokenA);
-  const tokenBSymbol = getTokenSymbol(pool.tokenB);
+  const getShortAddress = (address) => {
+    if (!address) return 'Unknown';
+    return `${address.slice(0, 6)}...${address.slice(-4)}`;
+  };
+
+  if (loading) {
+    return (
+      <div className="cyber-card border-gray-600 rounded-xl p-6 text-center">
+        <div className="text-gray-400 font-cyber animate-pulse">
+          Loading pool info...
+        </div>
+      </div>
+    );
+  }
+
+  if (!tokenAInfo || !tokenBInfo) {
+    return (
+      <div className="cyber-card border-red-500 rounded-xl p-6 text-center">
+        <div className="text-red-400 font-cyber mb-2">
+          Error Loading Pool
+        </div>
+        <div className="text-gray-400 text-xs">
+          Could not load token information
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className={`cyber-card rounded-xl p-6 pencil-effect transition-all hover:scale-105 cursor-pointer thin-neon-border ${
@@ -53,10 +108,12 @@ const PoolCard = ({ pool, onSelectPool, isSelected = false, showActions = true }
       <div className="flex justify-between items-start mb-4">
         <div>
           <h3 className="text-xl font-cyber text-white mb-1">
-            {tokenASymbol} / {tokenBSymbol}
+            {tokenAInfo.symbol} / {tokenBInfo.symbol}
           </h3>
-          <div className="text-sm text-gray-400">
-            Pool ID: {pool.id.slice(0, 8)}...
+          <div className="text-xs text-gray-400 space-y-1">
+            <div>Pool ID: {pool.id.slice(0, 8)}...</div>
+            <div>TokenA: {getShortAddress(pool.tokenA)}</div>
+            <div>TokenB: {getShortAddress(pool.tokenB)}</div>
           </div>
         </div>
         {isSelected && (
@@ -88,10 +145,10 @@ const PoolCard = ({ pool, onSelectPool, isSelected = false, showActions = true }
           <div>
             <div className="text-gray-400 text-xs mb-1">Available Liquidity</div>
             <div className="text-electric-purple font-cyber">
-              {formatAmount(pool.reserveA)} {tokenASymbol}
+              {formatAmount(pool.reserveA, tokenAInfo.decimals)} {tokenAInfo.symbol}
             </div>
             <div className="text-electric-purple font-cyber">
-              {formatAmount(pool.reserveB)} {tokenBSymbol}
+              {formatAmount(pool.reserveB, tokenBInfo.decimals)} {tokenBInfo.symbol}
             </div>
           </div>
         </div>
@@ -102,15 +159,15 @@ const PoolCard = ({ pool, onSelectPool, isSelected = false, showActions = true }
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {/* Token A Stats */}
           <div className="space-y-2">
-            <h4 className="text-sm font-cyber text-neon-green">{tokenASymbol} Stats</h4>
+            <h4 className="text-sm font-cyber text-neon-green">{tokenAInfo.symbol} Stats</h4>
             <div className="space-y-1 text-xs">
               <div className="flex justify-between">
                 <span className="text-gray-400">Reserve:</span>
-                <span className="text-white">{formatAmount(pool.reserveA)}</span>
+                <span className="text-white">{formatAmount(pool.reserveA, tokenAInfo.decimals)}</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-gray-400">Borrowed:</span>
-                <span className="text-hot-pink">{formatAmount(pool.totalBorrowedA)}</span>
+                <span className="text-hot-pink">{formatAmount(pool.totalBorrowedA, tokenAInfo.decimals)}</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-gray-400">Utilization:</span>
@@ -125,15 +182,15 @@ const PoolCard = ({ pool, onSelectPool, isSelected = false, showActions = true }
 
           {/* Token B Stats */}
           <div className="space-y-2">
-            <h4 className="text-sm font-cyber text-neon-green">{tokenBSymbol} Stats</h4>
+            <h4 className="text-sm font-cyber text-neon-green">{tokenBInfo.symbol} Stats</h4>
             <div className="space-y-1 text-xs">
               <div className="flex justify-between">
                 <span className="text-gray-400">Reserve:</span>
-                <span className="text-white">{formatAmount(pool.reserveB)}</span>
+                <span className="text-white">{formatAmount(pool.reserveB, tokenBInfo.decimals)}</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-gray-400">Borrowed:</span>
-                <span className="text-hot-pink">{formatAmount(pool.totalBorrowedB)}</span>
+                <span className="text-hot-pink">{formatAmount(pool.totalBorrowedB, tokenBInfo.decimals)}</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-gray-400">Utilization:</span>
@@ -148,6 +205,27 @@ const PoolCard = ({ pool, onSelectPool, isSelected = false, showActions = true }
         </div>
       </div>
 
+      {/* Token Addresses (Expandable) */}
+      <div className="border-t border-gray-700 pt-4 mt-4">
+        <details className="text-xs">
+          <summary className="text-gray-400 cursor-pointer hover:text-cyber-blue">
+            Token Details
+          </summary>
+          <div className="mt-2 space-y-2">
+            <div>
+              <span className="text-gray-400">{tokenAInfo.symbol} Address:</span>
+              <div className="text-cyber-blue font-mono break-all">{pool.tokenA}</div>
+              <div className="text-gray-500">Decimals: {tokenAInfo.decimals}</div>
+            </div>
+            <div>
+              <span className="text-gray-400">{tokenBInfo.symbol} Address:</span>
+              <div className="text-cyber-blue font-mono break-all">{pool.tokenB}</div>
+              <div className="text-gray-500">Decimals: {tokenBInfo.decimals}</div>
+            </div>
+          </div>
+        </details>
+      </div>
+
       {/* Action Buttons */}
       {showActions && (
         <div className="flex space-x-2 mt-4 pt-4 border-t border-gray-700">
@@ -155,8 +233,8 @@ const PoolCard = ({ pool, onSelectPool, isSelected = false, showActions = true }
             className="flex-1 py-2 bg-neon-green text-black font-cyber text-sm rounded hover:bg-opacity-80 transition-all"
             onClick={(e) => {
               e.stopPropagation();
-              // Navigate to swap with this pool selected
-              window.location.href = `/swap?pool=${pool.id}`;
+              // Navigate to swap with this pool's tokens
+              window.location.href = `/swap?tokenA=${pool.tokenA}&tokenB=${pool.tokenB}`;
             }}
           >
             Swap
@@ -165,8 +243,8 @@ const PoolCard = ({ pool, onSelectPool, isSelected = false, showActions = true }
             className="flex-1 py-2 bg-electric-purple text-black font-cyber text-sm rounded hover:bg-opacity-80 transition-all"
             onClick={(e) => {
               e.stopPropagation();
-              // Navigate to liquidity with this pool selected
-              window.location.href = `/liquidity?pool=${pool.id}`;
+              // Navigate to liquidity with this pool's tokens
+              window.location.href = `/liquidity?tokenA=${pool.tokenA}&tokenB=${pool.tokenB}`;
             }}
           >
             Add Liquidity
