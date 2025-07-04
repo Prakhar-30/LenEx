@@ -1,16 +1,99 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
-body {
-  margin: 0;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
-    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
-    sans-serif;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
+@import 'tailwindcss/base';
+@import 'tailwindcss/components';
+@import 'tailwindcss/utilities';
+@import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&display=swap');
+
+@keyframes glow {
+  from {
+    text-shadow: 0 0 1px currentColor, 0 0 2px currentColor;
+  }
+  to {
+    text-shadow: 0 0 2px currentColor, 0 0 4px currentColor;
+  }
 }
 
-code {
-  font-family: source-code-pro, Menlo, Monaco, Consolas, 'Courier New',
-    monospace;
+@keyframes neon-pulse {
+  0%, 100% {
+    box-shadow: 0 0 2px currentColor, inset 0 0 2px currentColor;
+  }
+  50% {
+    box-shadow: 0 0 4px currentColor, inset 0 0 4px currentColor;
+  }
+}
+
+.pencil-effect {
+  filter: contrast(1.5) brightness(1.1);
+  background: linear-gradient(45deg, transparent 48%, rgba(255,255,255,0.1) 49%, rgba(255,255,255,0.1) 51%, transparent 52%);
+}
+
+.neon-border {
+  box-shadow: 0 0 5px currentColor, inset 0 0 5px currentColor;
+}
+
+.thin-neon-border {
+  box-shadow: 0 0 3px rgba(0, 245, 255, 0.5), inset 0 0 3px rgba(0, 245, 255, 0.3);
+  border: 1px solid rgba(0, 245, 255, 0.6);
+  animation: neon-pulse 3s ease-in-out infinite;
+}
+
+.cyber-card {
+  background: rgba(0, 0, 0, 0.8);
+  border: 2px solid;
+  backdrop-filter: blur(10px);
+  position: relative;
+}
+
+.cyber-card.thin-neon-border {
+  border: 1px solid rgba(0, 245, 255, 0.6);
+}
+
+/* Specific section borders for swap interface */
+.swap-section {
+  border: 1px solid rgba(0, 245, 255, 0.4);
+  box-shadow: 0 0 2px rgba(0, 245, 255, 0.3);
+  border-radius: 12px;
+  padding: 1rem;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(8px);
+}
+
+.pool-section {
+  border: 1px solid rgba(0, 245, 255, 0.5);
+  box-shadow: 0 0 3px rgba(0, 245, 255, 0.4);
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.7);
+  backdrop-filter: blur(10px);
+}
+
+/* Enhanced pool card styling */
+.pool-card-enhanced {
+  border: 1px solid rgba(0, 245, 255, 0.3);
+  box-shadow: 
+    0 0 2px rgba(0, 245, 255, 0.2),
+    inset 0 0 2px rgba(0, 245, 255, 0.1);
+  transition: all 0.3s ease;
+}
+
+.pool-card-enhanced:hover {
+  border-color: rgba(0, 245, 255, 0.6);
+  box-shadow: 
+    0 0 4px rgba(0, 245, 255, 0.4),
+    inset 0 0 4px rgba(0, 245, 255, 0.2);
+}
+
+/* Form section styling */
+.form-section {
+  border: 1px solid rgba(191, 0, 255, 0.4);
+  box-shadow: 0 0 2px rgba(191, 0, 255, 0.3);
+  border-radius: 8px;
+  padding: 1rem;
+  background: rgba(0, 0, 0, 0.5);
+}
+
+/* Stats section styling */
+.stats-section {
+  border: 1px solid rgba(57, 255, 20, 0.4);
+  box-shadow: 0 0 2px rgba(57, 255, 20, 0.3);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.6);
 }
