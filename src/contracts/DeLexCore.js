@@ -1,4 +1,4 @@
-export const DeLex_CORE_ADDRESS = "0x27cc171d68B20BBE3E81B009F337b17b06196f82";
+export const DeLex_CORE_ADDRESS = "0xDE190D2300D76B4E787140aB4f0C87Bd7cff28F7";
 
 export const DeLex_CORE_ABI = [
 	{
@@ -128,13 +128,6 @@ export const DeLex_CORE_ABI = [
 		"type": "error"
 	},
 	{
-		"inputs": [],
-		"name": "renounceOwnership",
-		"outputs": [],
-		"stateMutability": "nonpayable",
-		"type": "function"
-	},
-	{
 		"inputs": [
 			{
 				"internalType": "address",
@@ -144,6 +137,68 @@ export const DeLex_CORE_ABI = [
 		],
 		"name": "SafeERC20FailedOperation",
 		"type": "error"
+	},
+	{
+		"anonymous": false,
+		"inputs": [
+			{
+				"indexed": true,
+				"internalType": "bytes32",
+				"name": "poolId",
+				"type": "bytes32"
+			},
+			{
+				"indexed": false,
+				"internalType": "address",
+				"name": "user",
+				"type": "address"
+			},
+			{
+				"indexed": false,
+				"internalType": "address",
+				"name": "token",
+				"type": "address"
+			},
+			{
+				"indexed": false,
+				"internalType": "uint256",
+				"name": "amount",
+				"type": "uint256"
+			}
+		],
+		"name": "CollateralDeposited",
+		"type": "event"
+	},
+	{
+		"anonymous": false,
+		"inputs": [
+			{
+				"indexed": true,
+				"internalType": "bytes32",
+				"name": "poolId",
+				"type": "bytes32"
+			},
+			{
+				"indexed": false,
+				"internalType": "address",
+				"name": "user",
+				"type": "address"
+			},
+			{
+				"indexed": false,
+				"internalType": "address",
+				"name": "token",
+				"type": "address"
+			},
+			{
+				"indexed": false,
+				"internalType": "uint256",
+				"name": "amount",
+				"type": "uint256"
+			}
+		],
+		"name": "CollateralWithdrawn",
+		"type": "event"
 	},
 	{
 		"anonymous": false,
@@ -289,6 +344,13 @@ export const DeLex_CORE_ABI = [
 				"type": "uint256"
 			}
 		],
+		"stateMutability": "nonpayable",
+		"type": "function"
+	},
+	{
+		"inputs": [],
+		"name": "renounceOwnership",
+		"outputs": [],
 		"stateMutability": "nonpayable",
 		"type": "function"
 	},
@@ -513,6 +575,77 @@ export const DeLex_CORE_ABI = [
 	{
 		"inputs": [
 			{
+				"internalType": "address",
+				"name": "user",
+				"type": "address"
+			}
+		],
+		"name": "getAllUserPositions",
+		"outputs": [
+			{
+				"internalType": "bytes32[]",
+				"name": "activePoolIds",
+				"type": "bytes32[]"
+			},
+			{
+				"components": [
+					{
+						"internalType": "uint256",
+						"name": "liquidityShares",
+						"type": "uint256"
+					},
+					{
+						"internalType": "uint256",
+						"name": "borrowedA",
+						"type": "uint256"
+					},
+					{
+						"internalType": "uint256",
+						"name": "borrowedB",
+						"type": "uint256"
+					},
+					{
+						"internalType": "uint256",
+						"name": "collateralA",
+						"type": "uint256"
+					},
+					{
+						"internalType": "uint256",
+						"name": "collateralB",
+						"type": "uint256"
+					},
+					{
+						"internalType": "uint256",
+						"name": "lastUpdateTime",
+						"type": "uint256"
+					}
+				],
+				"internalType": "struct DeLexCore.UserPosition[]",
+				"name": "positions",
+				"type": "tuple[]"
+			},
+			{
+				"internalType": "uint256[]",
+				"name": "healthFactors",
+				"type": "uint256[]"
+			},
+			{
+				"internalType": "uint256",
+				"name": "totalCollateralValue",
+				"type": "uint256"
+			},
+			{
+				"internalType": "uint256",
+				"name": "totalBorrowValue",
+				"type": "uint256"
+			}
+		],
+		"stateMutability": "view",
+		"type": "function"
+	},
+	{
+		"inputs": [
+			{
 				"internalType": "uint256",
 				"name": "amountIn",
 				"type": "uint256"
@@ -577,6 +710,111 @@ export const DeLex_CORE_ABI = [
 			}
 		],
 		"name": "getCollateralValue",
+		"outputs": [
+			{
+				"internalType": "uint256",
+				"name": "",
+				"type": "uint256"
+			}
+		],
+		"stateMutability": "view",
+		"type": "function"
+	},
+	{
+		"inputs": [
+			{
+				"internalType": "address",
+				"name": "user",
+				"type": "address"
+			},
+			{
+				"internalType": "bytes32",
+				"name": "poolId",
+				"type": "bytes32"
+			}
+		],
+		"name": "getDetailedUserPosition",
+		"outputs": [
+			{
+				"components": [
+					{
+						"internalType": "uint256",
+						"name": "liquidityShares",
+						"type": "uint256"
+					},
+					{
+						"internalType": "uint256",
+						"name": "borrowedA",
+						"type": "uint256"
+					},
+					{
+						"internalType": "uint256",
+						"name": "borrowedB",
+						"type": "uint256"
+					},
+					{
+						"internalType": "uint256",
+						"name": "collateralA",
+						"type": "uint256"
+					},
+					{
+						"internalType": "uint256",
+						"name": "collateralB",
+						"type": "uint256"
+					},
+					{
+						"internalType": "uint256",
+						"name": "lastUpdateTime",
+						"type": "uint256"
+					}
+				],
+				"internalType": "struct DeLexCore.UserPosition",
+				"name": "position",
+				"type": "tuple"
+			},
+			{
+				"internalType": "uint256",
+				"name": "collateralValue",
+				"type": "uint256"
+			},
+			{
+				"internalType": "uint256",
+				"name": "borrowValue",
+				"type": "uint256"
+			},
+			{
+				"internalType": "uint256",
+				"name": "healthFactor",
+				"type": "uint256"
+			},
+			{
+				"internalType": "uint256",
+				"name": "maxBorrowCapacity",
+				"type": "uint256"
+			},
+			{
+				"internalType": "uint256",
+				"name": "availableToBorrow",
+				"type": "uint256"
+			}
+		],
+		"stateMutability": "view",
+		"type": "function"
+	},
+	{
+		"inputs": [
+			{
+				"internalType": "address",
+				"name": "user",
+				"type": "address"
+			},
+			{
+				"internalType": "bytes32",
+				"name": "poolId",
+				"type": "bytes32"
+			}
+		],
+		"name": "getHealthFactor",
 		"outputs": [
 			{
 				"internalType": "uint256",

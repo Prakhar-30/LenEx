@@ -212,7 +212,7 @@ const Home = () => {
             <div className="cyber-card border-neon-green rounded-xl p-6 pencil-effect">
               <h3 className="text-xl font-cyber text-neon-green mb-4">⚡ Lightning Fast Swaps</h3>
               <p className="text-gray-300">
-                Execute trades instantly with minimal fees using our optimized AMM on BlockDAG's high-performance network.
+                Execute trades instantly with minimal fees using our optimized AMM on ETHEREUM's high-performance network.
               </p>
             </div>
             <div className="cyber-card border-electric-purple rounded-xl p-6 pencil-effect">
@@ -234,9 +234,9 @@ const Home = () => {
               </p>
             </div>
             <div className="cyber-card border-laser-orange rounded-xl p-6 pencil-effect">
-              <h3 className="text-xl font-cyber text-laser-orange mb-4">🌐 BlockDAG Powered</h3>
+              <h3 className="text-xl font-cyber text-laser-orange mb-4">🌐 ETHEREUM Powered</h3>
               <p className="text-gray-300">
-                Leveraging BlockDAG's innovative DAG structure for superior scalability and transaction throughput.
+                Leveraging ETHEREUM's innovative DAG structure for superior scalability and transaction throughput.
               </p>
             </div>
             <div className="cyber-card border-neon-green rounded-xl p-6 pencil-effect">

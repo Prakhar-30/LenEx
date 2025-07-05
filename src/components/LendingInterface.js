@@ -16,7 +16,7 @@ const LendingInterface = () => {
   const [selectedPool, setSelectedPool] = useState(null);
   const [amount, setAmount] = useState('');
   const [selectedTokenAddress, setSelectedTokenAddress] = useState('');
-  const [activeTab, setActiveTab] = useState('dashboard'); // 'dashboard', 'deposit', 'borrow', 'repay'
+  const [activeTab, setActiveTab] = useState('dashboard');
   const [loading, setLoading] = useState(false);
   const [dataLoading, setDataLoading] = useState(true);
   const [dashboardStats, setDashboardStats] = useState({
@@ -77,7 +77,6 @@ const LendingInterface = () => {
           try {
             const pool = await DeLexContract.getPoolInfo(poolId);
             
-            // Get token info for display
             const [tokenAInfo, tokenBInfo] = await Promise.all([
               fetchTokenInfo(pool.tokenA),
               fetchTokenInfo(pool.tokenB)
@@ -107,6 +106,7 @@ const LendingInterface = () => {
     }
   };
 
+  // FIXED: Improved user positions loading with better calculations
   const loadUserPositions = async () => {
     try {
       const poolIds = await DeLexContract.getAllPools();
@@ -127,7 +127,6 @@ const LendingInterface = () => {
           if (position.collateralA.gt(0) || position.collateralB.gt(0) || 
               position.borrowedA.gt(0) || position.borrowedB.gt(0)) {
             
-            // Get token info for calculations
             const [tokenAInfo, tokenBInfo] = await Promise.all([
               fetchTokenInfo(pool.tokenA),
               fetchTokenInfo(pool.tokenB)
@@ -143,22 +142,42 @@ const LendingInterface = () => {
             
             positions.push(positionData);
             
-            // Calculate values using contract's view functions
-            const collateralValue = await DeLexContract.getCollateralValue(account, poolId);
-            const borrowValue = await DeLexContract.getBorrowValue(account, poolId);
+            // FIXED: Manual calculation instead of relying on contract view functions
+            // Calculate collateral value (simplified 1:1 ratio for now)
+            const collateralA = parseFloat(ethers.utils.formatUnits(position.collateralA, tokenAInfo.decimals));
+            const collateralB = parseFloat(ethers.utils.formatUnits(position.collateralB, tokenBInfo.decimals));
+            const positionCollateralValue = collateralA + collateralB;
             
-            totalCollateralValue = totalCollateralValue.add(collateralValue);
-            totalBorrowedValue = totalBorrowedValue.add(borrowValue);
+            // Calculate borrowed value (simplified 1:1 ratio for now)
+            const borrowedA = parseFloat(ethers.utils.formatUnits(position.borrowedA, tokenAInfo.decimals));
+            const borrowedB = parseFloat(ethers.utils.formatUnits(position.borrowedB, tokenBInfo.decimals));
+            const positionBorrowedValue = borrowedA + borrowedB;
             
-            // Calculate health factor for this position
-            if (borrowValue.gt(0)) {
+            // Convert back to BigNumber for aggregation
+            const collateralValueWei = ethers.utils.parseEther(positionCollateralValue.toString());
+            const borrowedValueWei = ethers.utils.parseEther(positionBorrowedValue.toString());
+            
+            totalCollateralValue = totalCollateralValue.add(collateralValueWei);
+            totalBorrowedValue = totalBorrowedValue.add(borrowedValueWei);
+            
+            // FIXED: Proper health factor calculation
+            if (positionBorrowedValue > 0) {
               hasAnyBorrowedAmount = true;
-              // Health factor = (collateralValue * collateralFactor) / borrowValue
-              const maxBorrow = collateralValue.mul(collateralFactor).div(ethers.constants.WeiPerEther);
-              const healthFactor = maxBorrow.mul(ethers.constants.WeiPerEther).div(borrowValue);
+              // Health factor = (collateralValue * collateralFactor) / borrowedValue
+              const collateralFactorDecimal = parseFloat(ethers.utils.formatEther(collateralFactor));
+              const maxBorrowCapacity = positionCollateralValue * collateralFactorDecimal;
+              const healthFactor = maxBorrowCapacity / positionBorrowedValue;
               
-              if (healthFactor.lt(lowestHealthFactor)) {
-                lowestHealthFactor = healthFactor;
+              console.log(`Position health factor calculation:`, {
+                collateralValue: positionCollateralValue,
+                borrowedValue: positionBorrowedValue,
+                collateralFactor: collateralFactorDecimal,
+                maxBorrowCapacity,
+                healthFactor
+              });
+              
+              if (healthFactor < parseFloat(ethers.utils.formatEther(lowestHealthFactor))) {
+                lowestHealthFactor = ethers.utils.parseEther(healthFactor.toString());
               }
             }
           }
@@ -170,6 +189,14 @@ const LendingInterface = () => {
       // Calculate available to borrow
       const maxBorrowCapacity = totalCollateralValue.mul(collateralFactor).div(ethers.constants.WeiPerEther);
       const totalAvailableToBorrow = maxBorrowCapacity.sub(totalBorrowedValue);
+      
+      console.log('Dashboard stats calculation:', {
+        totalCollateralValue: ethers.utils.formatEther(totalCollateralValue),
+        totalBorrowedValue: ethers.utils.formatEther(totalBorrowedValue),
+        totalAvailableToBorrow: ethers.utils.formatEther(totalAvailableToBorrow),
+        hasAnyBorrowedAmount,
+        positionsCount: positions.length
+      });
       
       setUserPositions(positions);
       setDashboardStats({
@@ -183,57 +210,66 @@ const LendingInterface = () => {
     } catch (error) {
       console.error('Error loading user positions:', error);
     }
-  };// Calculate maximum withdrawable amount without becoming undercollateralized
+  };
+
+  // Calculate maximum withdrawable amount without becoming undercollateralized
   const calculateMaxWithdrawable = async (poolId, tokenAddress, tokenInfo, currentCollateral) => {
     try {
-      const collateralValue = await DeLexContract.getCollateralValue(account, poolId);
-      const borrowValue = await DeLexContract.getBorrowValue(account, poolId);
+      // Get current position data
+      const position = await DeLexContract.getUserPosition(account, poolId);
+      const pool = await DeLexContract.getPoolInfo(poolId);
       const collateralFactor = await DeLexContract.COLLATERAL_FACTOR();
       
+      // Manual calculation using simplified 1:1 token values
+      const [tokenAInfo, tokenBInfo] = await Promise.all([
+        fetchTokenInfo(pool.tokenA),
+        fetchTokenInfo(pool.tokenB)
+      ]);
+      
+      const collateralA = parseFloat(ethers.utils.formatUnits(position.collateralA, tokenAInfo.decimals));
+      const collateralB = parseFloat(ethers.utils.formatUnits(position.collateralB, tokenBInfo.decimals));
+      const borrowedA = parseFloat(ethers.utils.formatUnits(position.borrowedA, tokenAInfo.decimals));
+      const borrowedB = parseFloat(ethers.utils.formatUnits(position.borrowedB, tokenBInfo.decimals));
+      
+      const totalCollateralValue = collateralA + collateralB;
+      const totalBorrowedValue = borrowedA + borrowedB;
+      
       // If no borrowed amount, can withdraw all
-      if (borrowValue.eq(0)) {
+      if (totalBorrowedValue === 0) {
         return ethers.utils.formatUnits(currentCollateral, tokenInfo.decimals);
       }
       
-      // Calculate minimum collateral needed to maintain health factor above 1
-      // borrowValue <= collateralValue * collateralFactor
-      // minCollateralValue = borrowValue / collateralFactor
-      const minCollateralValue = borrowValue.mul(ethers.constants.WeiPerEther).div(collateralFactor);
+      // Calculate minimum collateral needed
+      const collateralFactorDecimal = parseFloat(ethers.utils.formatEther(collateralFactor));
+      const minCollateralValue = totalBorrowedValue / collateralFactorDecimal;
       
-      // Add 10% buffer for safety
-      const safeMinCollateralValue = minCollateralValue.mul(110).div(100);
+      // Add 10% safety buffer
+      const safeMinCollateralValue = minCollateralValue * 1.1;
       
-      if (collateralValue.lte(safeMinCollateralValue)) {
-        return '0'; // Cannot withdraw anything
+      if (totalCollateralValue <= safeMinCollateralValue) {
+        return '0';
       }
       
       // Maximum value that can be withdrawn
-      const maxWithdrawableValue = collateralValue.sub(safeMinCollateralValue);
-      
-      // For simplicity, assume 1:1 token to value ratio
-      // In a real system, you'd use price oracles
-      const maxWithdrawableTokens = maxWithdrawableValue;
+      const maxWithdrawableValue = totalCollateralValue - safeMinCollateralValue;
       
       // Don't allow withdrawal of more than current collateral
-      const actualMaxWithdrawable = maxWithdrawableTokens.gt(currentCollateral) 
-        ? currentCollateral 
-        : maxWithdrawableTokens;
+      const currentCollateralFormatted = parseFloat(ethers.utils.formatUnits(currentCollateral, tokenInfo.decimals));
+      const actualMaxWithdrawable = Math.min(maxWithdrawableValue, currentCollateralFormatted);
       
-      return ethers.utils.formatUnits(actualMaxWithdrawable, tokenInfo.decimals);
+      return Math.max(0, actualMaxWithdrawable).toFixed(6);
     } catch (error) {
       console.error('Error calculating max withdrawable:', error);
       return '0';
     }
   };
 
-  // Calculate max repayable amount - FIXED VERSION
+  // Calculate max repayable amount
   const calculateMaxRepayable = async (poolId, tokenAddress, tokenInfo) => {
     try {
-      // Get fresh data from contract
       const position = await DeLexContract.getUserPosition(account, poolId);
       const pool = await DeLexContract.getPoolInfo(poolId);
       
-      // Get borrowed amount for the specific token
       let borrowedAmount;
       if (tokenAddress.toLowerCase() === pool.tokenA.toLowerCase()) {
         borrowedAmount = position.borrowedA;
@@ -243,16 +279,13 @@ const LendingInterface = () => {
         return { maxRepayable: '0', borrowed: '0' };
       }
       
-      // If no debt, return 0
       if (borrowedAmount.eq(0)) {
         return { maxRepayable: '0', borrowed: '0' };
       }
       
-      // Get user's current balance
       const userBalance = await getTokenBalance(tokenAddress, account);
       const userBalanceWei = ethers.utils.parseUnits(userBalance, tokenInfo.decimals);
       
-      // Maximum repayable is the minimum of borrowed amount and user balance
       const maxRepayableWei = borrowedAmount.gt(userBalanceWei) ? userBalanceWei : borrowedAmount;
       
       return {
@@ -334,7 +367,6 @@ const LendingInterface = () => {
     });
   };
 
-  // ADD THIS MISSING FUNCTION
   const refreshRepaymentModal = async () => {
     if (repaymentModal.isOpen) {
       const { maxRepayable, borrowed } = await calculateMaxRepayable(
@@ -347,7 +379,7 @@ const LendingInterface = () => {
         ...prev,
         maxRepayable,
         currentBorrowed: borrowed,
-        repayAmount: '' // Reset amount when refreshing
+        repayAmount: ''
       }));
     }
   };
@@ -364,7 +396,6 @@ const LendingInterface = () => {
       const tokenInfo = await fetchTokenInfo(selectedTokenAddress);
       const amountWei = ethers.utils.parseUnits(amount, tokenInfo.decimals);
       
-      // Check and approve token
       const currentAllowance = await getTokenAllowance(selectedTokenAddress, account, DeLexContract.address);
       const currentAllowanceWei = ethers.utils.parseUnits(currentAllowance, tokenInfo.decimals);
       
@@ -430,7 +461,9 @@ const LendingInterface = () => {
     } finally {
       setLoading(false);
     }
-  };const repayTokens = async () => {
+  };
+
+  const repayTokens = async () => {
     if (!account || !DeLexContract || !selectedPool || !amount || !isValidAddress(selectedTokenAddress)) {
       toast.error('Please fill all required fields');
       return;
@@ -439,11 +472,9 @@ const LendingInterface = () => {
     try {
       setLoading(true);
       
-      // Get current borrowed amount to validate
       const position = await DeLexContract.getUserPosition(account, selectedPool.id);
       const tokenInfo = await fetchTokenInfo(selectedTokenAddress);
       
-      // Check which token and get borrowed amount
       let borrowedAmount;
       if (selectedTokenAddress.toLowerCase() === selectedPool.tokenA.toLowerCase()) {
         borrowedAmount = position.borrowedA;
@@ -454,7 +485,6 @@ const LendingInterface = () => {
         return;
       }
       
-      // Check if user has any debt for this token
       if (borrowedAmount.eq(0)) {
         toast.error(`You have no borrowed ${tokenInfo.symbol} to repay in this pool`);
         return;
@@ -464,13 +494,11 @@ const LendingInterface = () => {
       const borrowedFormatted = parseFloat(ethers.utils.formatUnits(borrowedAmount, tokenInfo.decimals));
       const repayAmountFormatted = parseFloat(amount);
       
-      // Check if trying to repay more than borrowed
       if (amountWei.gt(borrowedAmount)) {
         toast.error(`Cannot repay ${amount} ${tokenInfo.symbol}. You only borrowed ${borrowedFormatted.toFixed(4)} ${tokenInfo.symbol}`);
         return;
       }
       
-      // Check user's balance
       const userBalance = await getTokenBalance(selectedTokenAddress, account);
       const userBalanceFormatted = parseFloat(userBalance);
       
@@ -479,7 +507,6 @@ const LendingInterface = () => {
         return;
       }
       
-      // Check and approve token
       const currentAllowance = await getTokenAllowance(selectedTokenAddress, account, DeLexContract.address);
       const currentAllowanceWei = ethers.utils.parseUnits(currentAllowance, tokenInfo.decimals);
       
@@ -566,7 +593,6 @@ const LendingInterface = () => {
     }
   };
 
-  // FIXED VERSION OF handleModalRepayment
   const handleModalRepayment = async () => {
     const { position, tokenAddress, tokenInfo, repayAmount } = repaymentModal;
     
@@ -583,10 +609,8 @@ const LendingInterface = () => {
     try {
       setLoading(true);
       
-      // Get fresh position data to avoid stale state
       const currentPosition = await DeLexContract.getUserPosition(account, position.poolId);
       
-      // Get the actual borrowed amount from contract
       let actualBorrowedAmount;
       if (tokenAddress.toLowerCase() === position.pool.tokenA.toLowerCase()) {
         actualBorrowedAmount = currentPosition.borrowedA;
@@ -597,7 +621,6 @@ const LendingInterface = () => {
         return;
       }
       
-      // Check if user actually has debt
       if (actualBorrowedAmount.eq(0)) {
         toast.error(`No ${tokenInfo.symbol} debt found in this pool`);
         return;
@@ -605,14 +628,12 @@ const LendingInterface = () => {
       
       const amountWei = ethers.utils.parseUnits(repayAmount, tokenInfo.decimals);
       
-      // Double check against actual borrowed amount
       if (amountWei.gt(actualBorrowedAmount)) {
         const actualBorrowedFormatted = ethers.utils.formatUnits(actualBorrowedAmount, tokenInfo.decimals);
         toast.error(`Cannot repay ${repayAmount} ${tokenInfo.symbol}. You only borrowed ${parseFloat(actualBorrowedFormatted).toFixed(6)} ${tokenInfo.symbol}`);
         return;
       }
       
-      // Check user balance
       const userBalance = await getTokenBalance(tokenAddress, account);
       const userBalanceWei = ethers.utils.parseUnits(userBalance, tokenInfo.decimals);
       
@@ -621,7 +642,6 @@ const LendingInterface = () => {
         return;
       }
       
-      // Check and approve token
       const currentAllowance = await getTokenAllowance(tokenAddress, account, DeLexContract.address);
       const currentAllowanceWei = ethers.utils.parseUnits(currentAllowance, tokenInfo.decimals);
       
@@ -634,7 +654,6 @@ const LendingInterface = () => {
       
       toast.loading(`Repaying ${repayAmount} ${tokenInfo.symbol}...`);
       
-      // Use the actual borrowed amount if trying to repay more than borrowed
       const finalRepayAmount = amountWei.gt(actualBorrowedAmount) ? actualBorrowedAmount : amountWei;
       
       const tx = await DeLexContract.repay(position.poolId, tokenAddress, finalRepayAmount);
@@ -666,20 +685,28 @@ const LendingInterface = () => {
     }
   };
 
+  // FIXED: Better health factor calculation
   const calculatePositionHealthFactor = async (position) => {
     if (!DeLexContract || !account) return 'Unknown';
     
     try {
-      const collateralValue = await DeLexContract.getCollateralValue(account, position.poolId);
-      const borrowValue = await DeLexContract.getBorrowValue(account, position.poolId);
+      // Manual calculation using position data
+      const collateralA = parseFloat(ethers.utils.formatUnits(position.collateralA, position.tokenAInfo.decimals));
+      const collateralB = parseFloat(ethers.utils.formatUnits(position.collateralB, position.tokenBInfo.decimals));
+      const borrowedA = parseFloat(ethers.utils.formatUnits(position.borrowedA, position.tokenAInfo.decimals));
+      const borrowedB = parseFloat(ethers.utils.formatUnits(position.borrowedB, position.tokenBInfo.decimals));
       
-      if (borrowValue.eq(0)) return 'Safe';
+      const totalCollateralValue = collateralA + collateralB;
+      const totalBorrowedValue = borrowedA + borrowedB;
       
-      const collateralFactor = await DeLexContract.COLLATERAL_FACTOR();
-      const maxBorrow = collateralValue.mul(collateralFactor).div(ethers.constants.WeiPerEther);
-      const healthFactor = maxBorrow.mul(ethers.constants.WeiPerEther).div(borrowValue);
+      if (totalBorrowedValue === 0) return 'Safe';
+      if (totalCollateralValue === 0) return '0.00';
       
-      return parseFloat(ethers.utils.formatEther(healthFactor)).toFixed(2);
+      const collateralFactor = parseFloat(ethers.utils.formatEther(dashboardStats.collateralFactor));
+      const maxBorrowCapacity = totalCollateralValue * collateralFactor;
+      const healthFactor = maxBorrowCapacity / totalBorrowedValue;
+      
+      return Math.max(0, healthFactor).toFixed(2);
     } catch (error) {
       console.error('Error calculating health factor:', error);
       return 'Error';
@@ -740,17 +767,20 @@ const LendingInterface = () => {
       if (maxBorrow.eq(0)) return 0;
       
       const utilization = dashboardStats.totalBorrowedValue.mul(10000).div(maxBorrow);
-      return Math.min(10000, utilization.toNumber()) / 100; // Convert to percentage
+      return Math.min(10000, utilization.toNumber()) / 100;
     } catch (error) {
       console.error('Error calculating utilization:', error);
       return 0;
     }
   };
 
+  // FIXED: Better health factor formatting
   const formatHealthFactor = (healthFactor) => {
     if (healthFactor.eq(0)) return 'Safe';
     try {
       const formatted = parseFloat(ethers.utils.formatEther(healthFactor));
+      // Prevent extremely large numbers
+      if (formatted > 1000000) return 'Safe';
       return formatted.toFixed(2);
     } catch (error) {
       return 'Error';
@@ -794,7 +824,9 @@ const LendingInterface = () => {
         </div>
       </div>
     );
-  }return (
+  }
+
+  return (
     <div className="max-w-6xl mx-auto">
       {/* Withdrawal Modal */}
       {withdrawalModal.isOpen && (
@@ -1278,7 +1310,8 @@ const LendingInterface = () => {
 
               {/* Health Factor Warning */}
               {dashboardStats.overallHealthFactor.gt(0) && 
-               parseFloat(ethers.utils.formatEther(dashboardStats.overallHealthFactor)) < 1.5 && (
+               parseFloat(ethers.utils.formatEther(dashboardStats.overallHealthFactor)) < 1.5 && 
+               parseFloat(ethers.utils.formatEther(dashboardStats.overallHealthFactor)) < 1000000 && (
                 <div className="p-3 bg-red-900 bg-opacity-30 border border-red-500 rounded-lg">
                   <div className="text-red-400 font-cyber text-sm mb-1">
                     ⚠️ Health Factor Warning
@@ -1505,4 +1538,5 @@ const PositionSummary = ({
     </div>
   );
 };
+
 export default LendingInterface;
