@@ -1,105 +1,6 @@
-export const DeLex_CORE_ADDRESS = "0x0D46A57bb98804fBbAEA637b91817574cdaD696A";
+export const DeLex_CORE_ADDRESS = "0x5f51aF08B27b0C44EdB8B5779De4C41A40B454b5";
 
 export const DeLex_CORE_ABI = [
-	{
-		"inputs": [
-			{
-				"internalType": "bytes32",
-				"name": "poolId",
-				"type": "bytes32"
-			},
-			{
-				"internalType": "uint256",
-				"name": "amountA",
-				"type": "uint256"
-			},
-			{
-				"internalType": "uint256",
-				"name": "amountB",
-				"type": "uint256"
-			}
-		],
-		"name": "addLiquidity",
-		"outputs": [
-			{
-				"internalType": "uint256",
-				"name": "shares",
-				"type": "uint256"
-			}
-		],
-		"stateMutability": "nonpayable",
-		"type": "function"
-	},
-	{
-		"inputs": [
-			{
-				"internalType": "bytes32",
-				"name": "poolId",
-				"type": "bytes32"
-			},
-			{
-				"internalType": "address",
-				"name": "token",
-				"type": "address"
-			},
-			{
-				"internalType": "uint256",
-				"name": "amount",
-				"type": "uint256"
-			}
-		],
-		"name": "borrow",
-		"outputs": [],
-		"stateMutability": "nonpayable",
-		"type": "function"
-	},
-	{
-		"inputs": [
-			{
-				"internalType": "address",
-				"name": "tokenA",
-				"type": "address"
-			},
-			{
-				"internalType": "address",
-				"name": "tokenB",
-				"type": "address"
-			}
-		],
-		"name": "createPool",
-		"outputs": [
-			{
-				"internalType": "bytes32",
-				"name": "poolId",
-				"type": "bytes32"
-			}
-		],
-		"stateMutability": "nonpayable",
-		"type": "function"
-	},
-	{
-		"inputs": [
-			{
-				"internalType": "bytes32",
-				"name": "poolId",
-				"type": "bytes32"
-			},
-			{
-				"internalType": "address",
-				"name": "token",
-				"type": "address"
-			},
-			{
-				"internalType": "uint256",
-				"name": "amount",
-				"type": "uint256"
-			}
-		],
-		"name": "depositCollateral",
-		"outputs": [],
-		"stateMutability": "nonpayable",
-		"type": "function"
-	},
 	{
 		"inputs": [],
 		"stateMutability": "nonpayable",
@@ -319,99 +220,6 @@ export const DeLex_CORE_ABI = [
 		"type": "event"
 	},
 	{
-		"inputs": [
-			{
-				"internalType": "bytes32",
-				"name": "poolId",
-				"type": "bytes32"
-			},
-			{
-				"internalType": "uint256",
-				"name": "shares",
-				"type": "uint256"
-			}
-		],
-		"name": "removeLiquidity",
-		"outputs": [
-			{
-				"internalType": "uint256",
-				"name": "amountA",
-				"type": "uint256"
-			},
-			{
-				"internalType": "uint256",
-				"name": "amountB",
-				"type": "uint256"
-			}
-		],
-		"stateMutability": "nonpayable",
-		"type": "function"
-	},
-	{
-		"inputs": [],
-		"name": "renounceOwnership",
-		"outputs": [],
-		"stateMutability": "nonpayable",
-		"type": "function"
-	},
-	{
-		"inputs": [
-			{
-				"internalType": "bytes32",
-				"name": "poolId",
-				"type": "bytes32"
-			},
-			{
-				"internalType": "address",
-				"name": "token",
-				"type": "address"
-			},
-			{
-				"internalType": "uint256",
-				"name": "amount",
-				"type": "uint256"
-			}
-		],
-		"name": "repay",
-		"outputs": [],
-		"stateMutability": "nonpayable",
-		"type": "function"
-	},
-	{
-		"inputs": [
-			{
-				"internalType": "bytes32",
-				"name": "poolId",
-				"type": "bytes32"
-			},
-			{
-				"internalType": "address",
-				"name": "tokenIn",
-				"type": "address"
-			},
-			{
-				"internalType": "uint256",
-				"name": "amountIn",
-				"type": "uint256"
-			},
-			{
-				"internalType": "uint256",
-				"name": "minAmountOut",
-				"type": "uint256"
-			}
-		],
-		"name": "swap",
-		"outputs": [
-			{
-				"internalType": "uint256",
-				"name": "amountOut",
-				"type": "uint256"
-			}
-		],
-		"stateMutability": "nonpayable",
-		"type": "function"
-	},
-	{
 		"anonymous": false,
 		"inputs": [
 			{
@@ -511,15 +319,70 @@ export const DeLex_CORE_ABI = [
 		"type": "event"
 	},
 	{
-		"inputs": [
+		"inputs": [],
+		"name": "COLLATERAL_FACTOR",
+		"outputs": [
 			{
-				"internalType": "address",
-				"name": "newOwner",
-				"type": "address"
+				"internalType": "uint256",
+				"name": "",
+				"type": "uint256"
 			}
 		],
-		"name": "transferOwnership",
-		"outputs": [],
+		"stateMutability": "view",
+		"type": "function"
+	},
+	{
+		"inputs": [],
+		"name": "MAX_INTEREST_RATE",
+		"outputs": [
+			{
+				"internalType": "uint256",
+				"name": "",
+				"type": "uint256"
+			}
+		],
+		"stateMutability": "view",
+		"type": "function"
+	},
+	{
+		"inputs": [],
+		"name": "PRECISION",
+		"outputs": [
+			{
+				"internalType": "uint256",
+				"name": "",
+				"type": "uint256"
+			}
+		],
+		"stateMutability": "view",
+		"type": "function"
+	},
+	{
+		"inputs": [
+			{
+				"internalType": "bytes32",
+				"name": "poolId",
+				"type": "bytes32"
+			},
+			{
+				"internalType": "uint256",
+				"name": "amountA",
+				"type": "uint256"
+			},
+			{
+				"internalType": "uint256",
+				"name": "amountB",
+				"type": "uint256"
+			}
+		],
+		"name": "addLiquidity",
+		"outputs": [
+			{
+				"internalType": "uint256",
+				"name": "shares",
+				"type": "uint256"
+			}
+		],
 		"stateMutability": "nonpayable",
 		"type": "function"
 	},
@@ -541,22 +404,56 @@ export const DeLex_CORE_ABI = [
 				"type": "uint256"
 			}
 		],
-		"name": "withdrawCollateral",
+		"name": "borrow",
 		"outputs": [],
 		"stateMutability": "nonpayable",
 		"type": "function"
 	},
 	{
-		"inputs": [],
-		"name": "COLLATERAL_FACTOR",
+		"inputs": [
+			{
+				"internalType": "address",
+				"name": "tokenA",
+				"type": "address"
+			},
+			{
+				"internalType": "address",
+				"name": "tokenB",
+				"type": "address"
+			}
+		],
+		"name": "createPool",
 		"outputs": [
 			{
+				"internalType": "bytes32",
+				"name": "poolId",
+				"type": "bytes32"
+			}
+		],
+		"stateMutability": "nonpayable",
+		"type": "function"
+	},
+	{
+		"inputs": [
+			{
+				"internalType": "bytes32",
+				"name": "poolId",
+				"type": "bytes32"
+			},
+			{
+				"internalType": "address",
+				"name": "token",
+				"type": "address"
+			},
+			{
 				"internalType": "uint256",
-				"name": "",
+				"name": "amount",
 				"type": "uint256"
 			}
 		],
-		"stateMutability": "view",
+		"name": "depositCollateral",
+		"outputs": [],
+		"stateMutability": "nonpayable",
 		"type": "function"
 	},
 	{
@@ -988,19 +885,6 @@ export const DeLex_CORE_ABI = [
 	},
 	{
 		"inputs": [],
-		"name": "MAX_INTEREST_RATE",
-		"outputs": [
-			{
-				"internalType": "uint256",
-				"name": "",
-				"type": "uint256"
-			}
-		],
-		"stateMutability": "view",
-		"type": "function"
-	},
-	{
-		"inputs": [],
 		"name": "owner",
 		"outputs": [
 			{
@@ -1096,16 +980,109 @@ export const DeLex_CORE_ABI = [
 		"type": "function"
 	},
 	{
-		"inputs": [],
-		"name": "PRECISION",
-		"outputs": [
+		"inputs": [
+			{
+				"internalType": "bytes32",
+				"name": "poolId",
+				"type": "bytes32"
+			},
 			{
 				"internalType": "uint256",
-				"name": "",
+				"name": "shares",
 				"type": "uint256"
 			}
 		],
-		"stateMutability": "view",
+		"name": "removeLiquidity",
+		"outputs": [
+			{
+				"internalType": "uint256",
+				"name": "amountA",
+				"type": "uint256"
+			},
+			{
+				"internalType": "uint256",
+				"name": "amountB",
+				"type": "uint256"
+			}
+		],
+		"stateMutability": "nonpayable",
+		"type": "function"
+	},
+	{
+		"inputs": [],
+		"name": "renounceOwnership",
+		"outputs": [],
+		"stateMutability": "nonpayable",
+		"type": "function"
+	},
+	{
+		"inputs": [
+			{
+				"internalType": "bytes32",
+				"name": "poolId",
+				"type": "bytes32"
+			},
+			{
+				"internalType": "address",
+				"name": "token",
+				"type": "address"
+			},
+			{
+				"internalType": "uint256",
+				"name": "amount",
+				"type": "uint256"
+			}
+		],
+		"name": "repay",
+		"outputs": [],
+		"stateMutability": "nonpayable",
+		"type": "function"
+	},
+	{
+		"inputs": [
+			{
+				"internalType": "bytes32",
+				"name": "poolId",
+				"type": "bytes32"
+			},
+			{
+				"internalType": "address",
+				"name": "tokenIn",
+				"type": "address"
+			},
+			{
+				"internalType": "uint256",
+				"name": "amountIn",
+				"type": "uint256"
+			},
+			{
+				"internalType": "uint256",
+				"name": "minAmountOut",
+				"type": "uint256"
+			}
+		],
+		"name": "swap",
+		"outputs": [
+			{
+				"internalType": "uint256",
+				"name": "amountOut",
+				"type": "uint256"
+			}
+		],
+		"stateMutability": "nonpayable",
+		"type": "function"
+	},
+	{
+		"inputs": [
+			{
+				"internalType": "address",
+				"name": "newOwner",
+				"type": "address"
+			}
+		],
+		"name": "transferOwnership",
+		"outputs": [],
+		"stateMutability": "nonpayable",
 		"type": "function"
 	},
 	{
@@ -1179,6 +1156,29 @@ export const DeLex_CORE_ABI = [
 			}
 		],
 		"stateMutability": "view",
+		"type": "function"
+	},
+	{
+		"inputs": [
+			{
+				"internalType": "bytes32",
+				"name": "poolId",
+				"type": "bytes32"
+			},
+			{
+				"internalType": "address",
+				"name": "token",
+				"type": "address"
+			},
+			{
+				"internalType": "uint256",
+				"name": "amount",
+				"type": "uint256"
+			}
+		],
+		"name": "withdrawCollateral",
+		"outputs": [],
+		"stateMutability": "nonpayable",
 		"type": "function"
 	}
 ];

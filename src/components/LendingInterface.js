@@ -268,142 +268,85 @@ const checkBorrowingAvailability = async () => {
     console.log('Checking borrowing availability for pool:', selectedPool.id);
     
     const position = await DeLexContract.getUserPosition(account, selectedPool.id);
-    const pool = await DeLexContract.getPoolInfo(selectedPool.id);
     
-    let canBorrow = false;
+    // Use the contract's built-in function to determine what can be borrowed
+    const contractResult = await DeLexContract.getAvailableTokensToBorrow(account, selectedPool.id);
+    
+    console.log('Contract getAvailableTokensToBorrow result:', {
+      canBorrow: contractResult.canBorrow,
+      availableToken: contractResult.availableToken,
+      maxBorrowAmount: contractResult.maxBorrowAmount.toString()
+    });
+    
+    if (!contractResult.canBorrow) {
+      console.log('Contract says cannot borrow');
+      resetBorrowingState();
+      return;
+    }
+    
+    // Determine which token info to use based on contract result
     let availableTokenToBorrow = null;
-    let maxBorrowAmount = '0';
     let collateralToken = null;
-    let borrowableToken = null;
-
-    // Check collateral and determine what can be borrowed
-    if (position.collateralA.gt(0) && position.collateralB.eq(0)) {
-      // Has tokenA as collateral, can borrow tokenB
-      canBorrow = true;
-      collateralToken = {
+    
+    const availableTokenAddress = contractResult.availableToken.toLowerCase();
+    const tokenAAddress = selectedPool.tokenA.toLowerCase();
+    const tokenBAddress = selectedPool.tokenB.toLowerCase();
+    
+    if (availableTokenAddress === tokenAAddress) {
+      // Can borrow tokenA, so must have tokenB as collateral
+      availableTokenToBorrow = {
         address: selectedPool.tokenA,
-        info: selectedPool.tokenAInfo,
-        amount: position.collateralA
+        info: selectedPool.tokenAInfo
       };
-      borrowableToken = {
-        address: selectedPool.tokenB,
-        info: selectedPool.tokenBInfo
-      };
-      availableTokenToBorrow = borrowableToken;
-      
-      console.log('User has tokenA collateral, can borrow tokenB');
-    } else if (position.collateralB.gt(0) && position.collateralA.eq(0)) {
-      // Has tokenB as collateral, can borrow tokenA
-      canBorrow = true;
       collateralToken = {
         address: selectedPool.tokenB,
         info: selectedPool.tokenBInfo,
         amount: position.collateralB
       };
-      borrowableToken = {
-        address: selectedPool.tokenA,
-        info: selectedPool.tokenAInfo
+      console.log(`Can borrow ${selectedPool.tokenAInfo.symbol}, collateral is ${selectedPool.tokenBInfo.symbol}`);
+    } else if (availableTokenAddress === tokenBAddress) {
+      // Can borrow tokenB, so must have tokenA as collateral  
+      availableTokenToBorrow = {
+        address: selectedPool.tokenB,
+        info: selectedPool.tokenBInfo
       };
-      availableTokenToBorrow = borrowableToken;
-      
-      console.log('User has tokenB collateral, can borrow tokenA');
+      collateralToken = {
+        address: selectedPool.tokenA,
+        info: selectedPool.tokenAInfo,
+        amount: position.collateralA
+      };
+      console.log(`Can borrow ${selectedPool.tokenBInfo.symbol}, collateral is ${selectedPool.tokenAInfo.symbol}`);
     } else {
-      console.log('No valid collateral configuration for borrowing');
-      canBorrow = false;
+      console.error('Contract returned unknown token address:', contractResult.availableToken);
+      resetBorrowingState();
+      return;
     }
-
-    // Calculate max borrow amount if can borrow
-    if (canBorrow && availableTokenToBorrow) {
-      try {
-        // FIXED: Use contract's built-in function for available tokens to borrow
-        const contractResult = await DeLexContract.getAvailableTokensToBorrow(account, selectedPool.id);
-        
-        if (contractResult.canBorrow && contractResult.maxBorrowAmount.gt(0)) {
-          // Use the contract's calculation directly
-          maxBorrowAmount = ethers.utils.formatUnits(
-            contractResult.maxBorrowAmount, 
-            availableTokenToBorrow.info.decimals
-          );
-          console.log('Contract says max borrow amount:', maxBorrowAmount);
-        } else {
-          // Fallback to manual calculation
-          const collateralValue = await DeLexContract.getCollateralValue(account, selectedPool.id);
-          const borrowValue = await DeLexContract.getBorrowValue(account, selectedPool.id);
-          const collateralFactor = await DeLexContract.COLLATERAL_FACTOR();
-          
-          const maxBorrowCapacity = collateralValue.mul(collateralFactor).div(ethers.constants.WeiPerEther);
-          
-          if (maxBorrowCapacity.gt(borrowValue)) {
-            const availableAmount = maxBorrowCapacity.sub(borrowValue);
-            // FIXED: Use proper token decimals for formatting
-            maxBorrowAmount = ethers.utils.formatUnits(availableAmount, availableTokenToBorrow.info.decimals);
-            console.log('Manual calculation max borrow amount:', maxBorrowAmount);
-          }
-        }
-
-        // FIXED: Check pool liquidity with proper decimals
-        const isTokenA = availableTokenToBorrow.address.toLowerCase() === selectedPool.tokenA.toLowerCase();
-        const poolReserve = isTokenA ? selectedPool.reserveA : selectedPool.reserveB;
-        
-        // Format pool liquidity using correct decimals
-        const poolLiquidity = ethers.utils.formatUnits(poolReserve, availableTokenToBorrow.info.decimals);
-        
-        console.log('Pool reserve check:', {
-          poolReserve: poolReserve.toString(),
-          poolLiquidity,
-          tokenDecimals: availableTokenToBorrow.info.decimals,
-          maxBorrowAmount
-        });
-        
-        // Take minimum of available borrow capacity and pool liquidity
-        if (parseFloat(poolLiquidity) < parseFloat(maxBorrowAmount)) {
-          console.log('Max borrow amount limited by pool liquidity');
-          maxBorrowAmount = poolLiquidity;
-        }
-        
-        // FIXED: Ensure we don't show 0 when there should be available amount
-        if (parseFloat(maxBorrowAmount) <= 0 && poolStats.totalAvailableToBorrow.gt(0)) {
-          // If pool stats show available amount but calculation shows 0, use a minimum
-          const minBorrowable = Math.min(
-            parseFloat(ethers.utils.formatEther(poolStats.totalAvailableToBorrow)),
-            parseFloat(poolLiquidity)
-          );
-          if (minBorrowable > 0) {
-            maxBorrowAmount = minBorrowable.toFixed(6);
-            console.log('Used fallback minimum borrowable amount:', maxBorrowAmount);
-          }
-        }
-
-      } catch (calcError) {
-        console.error('Error calculating max borrow amount:', calcError);
-        maxBorrowAmount = '0';
-      }
-    }
-
+    
+    // Format the max borrow amount using the correct token decimals
+    const maxBorrowAmount = ethers.utils.formatUnits(
+      contractResult.maxBorrowAmount,
+      availableTokenToBorrow.info.decimals
+    );
+    
+    console.log('Final borrowing state:', {
+      canBorrow: true,
+      maxBorrowAmount,
+      availableToken: availableTokenToBorrow.info.symbol,
+      collateralToken: collateralToken.info.symbol
+    });
+    
     setBorrowingState({
-      canBorrow,
+      canBorrow: true,
       availableTokenToBorrow,
       maxBorrowAmount,
       collateralToken,
-      borrowableToken
+      borrowableToken: availableTokenToBorrow
     });
 
     // Auto-select the available token for borrowing
-    if (availableTokenToBorrow && activeTab === 'borrow') {
+    if (activeTab === 'borrow') {
       setSelectedTokenAddress(availableTokenToBorrow.address);
     }
-
-    console.log('Borrowing state updated:', {
-      canBorrow,
-      maxBorrowAmount,
-      availableToken: availableTokenToBorrow?.info?.symbol,
-      collateralToken: collateralToken?.info?.symbol,
-      poolLiquidity: availableTokenToBorrow ? ethers.utils.formatUnits(
-        availableTokenToBorrow.address.toLowerCase() === selectedPool.tokenA.toLowerCase() ? 
-        selectedPool.reserveA : selectedPool.reserveB,
-        availableTokenToBorrow.info.decimals
-      ) : '0'
-    });
 
   } catch (error) {
     console.error('Error checking borrowing availability:', error);

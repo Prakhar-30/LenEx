@@ -5,6 +5,7 @@ import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 
 contract DeLexCore is ReentrancyGuard, Ownable {
     using SafeERC20 for IERC20;
@@ -153,7 +154,6 @@ contract DeLexCore is ReentrancyGuard, Ownable {
         emit TokensSwapped(poolId, msg.sender, tokenIn, amountIn, amountOut);
     }
     
-    // FIXED: Cross-token borrowing logic - can only borrow the token you didn't deposit as collateral
     function borrow(bytes32 poolId, address token, uint256 amount) external nonReentrant {
         Pool storage pool = pools[poolId];
         require(pool.exists, "Pool doesn't exist");
@@ -164,22 +164,24 @@ contract DeLexCore is ReentrancyGuard, Ownable {
         
         bool isTokenA = token == pool.tokenA;
         
-        // FIXED: Cross-token borrowing validation
+        // Cross-token borrowing validation
         if (isTokenA) {
-            // Trying to borrow tokenA - must have tokenB as collateral
             require(position.collateralB > 0, "Must deposit tokenB as collateral to borrow tokenA");
             require(position.collateralA == 0, "Cannot borrow tokenA if you have tokenA as collateral");
         } else {
-            // Trying to borrow tokenB - must have tokenA as collateral
             require(position.collateralA > 0, "Must deposit tokenA as collateral to borrow tokenB");
             require(position.collateralB == 0, "Cannot borrow tokenB if you have tokenB as collateral");
         }
         
-        // Check collateral ratio
+        // Check collateral ratio with improved calculation
         uint256 collateralValue = getCollateralValue(msg.sender, poolId);
-        uint256 borrowValue = getBorrowValue(msg.sender, poolId) + amount;
+        uint256 borrowValue = getBorrowValue(msg.sender, poolId);
         
-        require(borrowValue <= (collateralValue * COLLATERAL_FACTOR) / PRECISION, "Insufficient collateral");
+        // Calculate the value of the new borrow amount in 18 decimals
+        uint256 newBorrowValue = normalizeTokenAmount(token, amount);
+        uint256 totalBorrowValue = borrowValue + newBorrowValue;
+        
+        require(totalBorrowValue <= (collateralValue * COLLATERAL_FACTOR) / PRECISION, "Insufficient collateral");
         
         // Check pool liquidity
         if (isTokenA) {
@@ -236,7 +238,7 @@ contract DeLexCore is ReentrancyGuard, Ownable {
         UserPosition storage position = userPositions[msg.sender][poolId];
         bool isTokenA = token == pool.tokenA;
         
-        // FIXED: Prevent depositing both tokens as collateral in the same pool
+        // Prevent depositing both tokens as collateral in the same pool
         if (isTokenA) {
             require(position.collateralB == 0 && position.borrowedB == 0, "Cannot deposit tokenA as collateral if you have tokenB position");
         } else {
@@ -287,18 +289,58 @@ contract DeLexCore is ReentrancyGuard, Ownable {
         emit CollateralWithdrawn(poolId, msg.sender, token, amount);
     }
     
-    // FIXED: Better value calculation functions
-    function getCollateralValue(address user, bytes32 poolId) public view returns (uint256) {
-        UserPosition storage position = userPositions[user][poolId];
-        // Using simplified 1:1 token value ratio for now
-        // In production, this should use price oracles
-        return position.collateralA + position.collateralB;
+    // FIXED: Helper function to normalize token amounts to 18 decimals for value calculations
+    function normalizeTokenAmount(address token, uint256 amount) internal view returns (uint256) {
+        uint8 decimals = IERC20Metadata(token).decimals();
+        if (decimals == 18) {
+            return amount;
+        } else if (decimals < 18) {
+            return amount * (10 ** (18 - decimals));
+        } else {
+            // If token has more than 18 decimals (rare), scale down
+            return amount / (10 ** (decimals - 18));
+        }
     }
     
+    // FIXED: Helper function to denormalize from 18 decimals back to token decimals
+    function denormalizeTokenAmount(address token, uint256 normalizedAmount) internal view returns (uint256) {
+        uint8 decimals = IERC20Metadata(token).decimals();
+        if (decimals == 18) {
+            return normalizedAmount;
+        } else if (decimals < 18) {
+            return normalizedAmount / (10 ** (18 - decimals));
+        } else {
+            // If token has more than 18 decimals (rare), scale up
+            return normalizedAmount * (10 ** (decimals - 18));
+        }
+    }
+    
+    // FIXED: Better collateral value calculation with proper decimal handling
+    function getCollateralValue(address user, bytes32 poolId) public view returns (uint256) {
+        UserPosition storage position = userPositions[user][poolId];
+        Pool storage pool = pools[poolId];
+        
+        uint256 collateralAValue = 0;
+        uint256 collateralBValue = 0;
+        
+        if (position.collateralA > 0) {
+            collateralAValue = normalizeTokenAmount(pool.tokenA, position.collateralA);
+        }
+        
+        if (position.collateralB > 0) {
+            collateralBValue = normalizeTokenAmount(pool.tokenB, position.collateralB);
+        }
+        
+        // For now, assume 1:1 value ratio after decimal normalization
+        // In production, integrate with price oracles
+        return collateralAValue + collateralBValue;
+    }
+    
+    // FIXED: Better borrow value calculation with decimal handling and interest
     function getBorrowValue(address user, bytes32 poolId) public view returns (uint256) {
         UserPosition storage position = userPositions[user][poolId];
-        uint256 timeElapsed = block.timestamp - position.lastUpdateTime;
         Pool storage pool = pools[poolId];
+        uint256 timeElapsed = block.timestamp - position.lastUpdateTime;
         
         // Calculate current borrowed amounts with accrued interest
         uint256 currentBorrowedA = position.borrowedA;
@@ -314,11 +356,21 @@ contract DeLexCore is ReentrancyGuard, Ownable {
             currentBorrowedB += interestB;
         }
         
-        // Using simplified 1:1 token value ratio for now
-        return currentBorrowedA + currentBorrowedB;
+        uint256 borrowedAValue = 0;
+        uint256 borrowedBValue = 0;
+        
+        if (currentBorrowedA > 0) {
+            borrowedAValue = normalizeTokenAmount(pool.tokenA, currentBorrowedA);
+        }
+        
+        if (currentBorrowedB > 0) {
+            borrowedBValue = normalizeTokenAmount(pool.tokenB, currentBorrowedB);
+        }
+        
+        return borrowedAValue + borrowedBValue;
     }
     
-    // NEW: Function to get available tokens to borrow based on collateral
+    // FIXED: Better available tokens calculation with proper decimal handling
     function getAvailableTokensToBorrow(address user, bytes32 poolId) external view returns (
         address availableToken,
         uint256 maxBorrowAmount,
@@ -336,18 +388,29 @@ contract DeLexCore is ReentrancyGuard, Ownable {
             availableToken = pool.tokenA;
             canBorrow = true;
         } else {
-            // No collateral or mixed collateral (shouldn't happen with new logic)
             canBorrow = false;
             return (address(0), 0, false);
         }
         
-        // Calculate max borrow amount
+        // Calculate max borrow amount using normalized values (18 decimals)
         uint256 collateralValue = getCollateralValue(user, poolId);
         uint256 currentBorrowValue = getBorrowValue(user, poolId);
         uint256 maxBorrowCapacity = (collateralValue * COLLATERAL_FACTOR) / PRECISION;
         
+        uint256 availableBorrowValue = 0;
         if (maxBorrowCapacity > currentBorrowValue) {
-            maxBorrowAmount = maxBorrowCapacity - currentBorrowValue;
+            availableBorrowValue = maxBorrowCapacity - currentBorrowValue;
+        }
+        
+        // Convert back to token's native decimals
+        if (availableBorrowValue > 0) {
+            maxBorrowAmount = denormalizeTokenAmount(availableToken, availableBorrowValue);
+            
+            // Check pool liquidity constraint
+            uint256 poolReserve = availableToken == pool.tokenA ? pool.reserveA : pool.reserveB;
+            if (maxBorrowAmount > poolReserve) {
+                maxBorrowAmount = poolReserve;
+            }
         } else {
             maxBorrowAmount = 0;
         }
@@ -371,7 +434,7 @@ contract DeLexCore is ReentrancyGuard, Ownable {
         return (maxBorrowCapacity * PRECISION) / borrowValue;
     }
     
-    // View function to get detailed position info including health factor
+    // Enhanced view function to get detailed position info including health factor
     function getDetailedUserPosition(address user, bytes32 poolId) external view returns (
         UserPosition memory position,
         uint256 collateralValue,
