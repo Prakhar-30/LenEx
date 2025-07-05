@@ -3,7 +3,7 @@ import { ethers } from 'ethers';
 import { useToken } from '../hooks/useToken';
 import { useWallet } from '../hooks/useWallet';
 
-const PoolCard = ({ pool, onSelectPool, isSelected = false, showActions = true }) => {
+const PoolCard = ({ pool, onSelectPool, isSelected = false, showActions = false }) => {
   const { signer } = useWallet();
   const { fetchTokenInfo, isValidAddress } = useToken(signer);
   
@@ -73,6 +73,41 @@ const PoolCard = ({ pool, onSelectPool, isSelected = false, showActions = true }
     return `${address.slice(0, 6)}...${address.slice(-4)}`;
   };
 
+  const getLiquidityStatus = () => {
+    if (!tokenAInfo || !tokenBInfo) return 'loading';
+    
+    const reserveA = parseFloat(ethers.utils.formatUnits(pool.reserveA, tokenAInfo.decimals));
+    const reserveB = parseFloat(ethers.utils.formatUnits(pool.reserveB, tokenBInfo.decimals));
+    const tvl = reserveA + reserveB;
+    
+    if (tvl === 0) return 'empty';
+    if (tvl < 10) return 'low';
+    if (tvl < 100) return 'medium';
+    return 'high';
+  };
+
+  const getLiquidityStatusColor = () => {
+    const status = getLiquidityStatus();
+    switch (status) {
+      case 'empty': return 'text-red-400';
+      case 'low': return 'text-laser-orange';
+      case 'medium': return 'text-cyber-blue';
+      case 'high': return 'text-neon-green';
+      default: return 'text-gray-400';
+    }
+  };
+
+  const getLiquidityStatusText = () => {
+    const status = getLiquidityStatus();
+    switch (status) {
+      case 'empty': return 'No Liquidity';
+      case 'low': return 'Low Liquidity';
+      case 'medium': return 'Medium Liquidity';
+      case 'high': return 'High Liquidity';
+      default: return 'Loading...';
+    }
+  };
+
   if (loading) {
     return (
       <div className="cyber-card border-gray-600 rounded-xl p-6 text-center">
@@ -97,7 +132,9 @@ const PoolCard = ({ pool, onSelectPool, isSelected = false, showActions = true }
   }
 
   return (
-    <div className={`cyber-card rounded-xl p-6 pencil-effect transition-all hover:scale-105 cursor-pointer thin-neon-border ${
+    <div className={`cyber-card rounded-xl p-6 pencil-effect transition-all ${
+      onSelectPool ? 'hover:scale-105 cursor-pointer' : ''
+    } thin-neon-border ${
       isSelected 
         ? 'border-neon-green border-2 bg-opacity-90' 
         : 'border-cyber-blue hover:border-electric-purple'
@@ -116,11 +153,16 @@ const PoolCard = ({ pool, onSelectPool, isSelected = false, showActions = true }
             <div>TokenB: {getShortAddress(pool.tokenB)}</div>
           </div>
         </div>
-        {isSelected && (
-          <div className="bg-neon-green text-black px-2 py-1 rounded text-xs font-cyber">
-            SELECTED
+        <div className="flex flex-col items-end">
+          {isSelected && (
+            <div className="bg-neon-green text-black px-2 py-1 rounded text-xs font-cyber mb-2">
+              SELECTED
+            </div>
+          )}
+          <div className={`text-xs font-cyber ${getLiquidityStatusColor()}`}>
+            {getLiquidityStatusText()}
           </div>
-        )}
+        </div>
       </div>
 
       {/* Pool Stats */}
@@ -144,10 +186,10 @@ const PoolCard = ({ pool, onSelectPool, isSelected = false, showActions = true }
         <div className="space-y-3">
           <div>
             <div className="text-gray-400 text-xs mb-1">Available Liquidity</div>
-            <div className="text-electric-purple font-cyber">
+            <div className="text-electric-purple font-cyber text-sm">
               {formatAmount(pool.reserveA, tokenAInfo.decimals)} {tokenAInfo.symbol}
             </div>
-            <div className="text-electric-purple font-cyber">
+            <div className="text-electric-purple font-cyber text-sm">
               {formatAmount(pool.reserveB, tokenBInfo.decimals)} {tokenBInfo.symbol}
             </div>
           </div>
@@ -226,51 +268,17 @@ const PoolCard = ({ pool, onSelectPool, isSelected = false, showActions = true }
         </details>
       </div>
 
-      {/* Action Buttons */}
-      {showActions && (
-        <div className="flex space-x-2 mt-4 pt-4 border-t border-gray-700">
-          <button 
-            className="flex-1 py-2 bg-neon-green text-black font-cyber text-sm rounded hover:bg-opacity-80 transition-all"
-            onClick={(e) => {
-              e.stopPropagation();
-              // Navigate to swap with this pool's tokens
-              window.location.href = `/swap?tokenA=${pool.tokenA}&tokenB=${pool.tokenB}`;
-            }}
-          >
-            Swap
-          </button>
-          <button 
-            className="flex-1 py-2 bg-electric-purple text-black font-cyber text-sm rounded hover:bg-opacity-80 transition-all"
-            onClick={(e) => {
-              e.stopPropagation();
-              // Navigate to liquidity with this pool's tokens
-              window.location.href = `/liquidity?tokenA=${pool.tokenA}&tokenB=${pool.tokenB}`;
-            }}
-          >
-            Add Liquidity
-          </button>
-          <button 
-            className="flex-1 py-2 bg-hot-pink text-black font-cyber text-sm rounded hover:bg-opacity-80 transition-all"
-            onClick={(e) => {
-              e.stopPropagation();
-              // Navigate to lending with this pool selected
-              window.location.href = `/lending?pool=${pool.id}`;
-            }}
-          >
-            Lend/Borrow
-          </button>
-        </div>
-      )}
-
       {/* Pool Health Indicator */}
-      <div className="mt-3 flex items-center justify-center">
+      <div className="mt-4 flex items-center justify-center">
         <div className={`w-3 h-3 rounded-full mr-2 ${
           parseFloat(calculateTVL()) > 1000 ? 'bg-neon-green' :
-          parseFloat(calculateTVL()) > 100 ? 'bg-laser-orange' : 'bg-hot-pink'
+          parseFloat(calculateTVL()) > 100 ? 'bg-laser-orange' : 
+          parseFloat(calculateTVL()) > 0 ? 'bg-cyber-blue' : 'bg-red-500'
         }`}></div>
         <span className="text-xs text-gray-400">
-          {parseFloat(calculateTVL()) > 1000 ? 'High Liquidity' :
-           parseFloat(calculateTVL()) > 100 ? 'Medium Liquidity' : 'Low Liquidity'}
+          {parseFloat(calculateTVL()) > 1000 ? 'Excellent Liquidity' :
+           parseFloat(calculateTVL()) > 100 ? 'Good Liquidity' : 
+           parseFloat(calculateTVL()) > 0 ? 'Limited Liquidity' : 'No Liquidity'}
         </span>
       </div>
     </div>

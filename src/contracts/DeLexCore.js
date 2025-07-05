@@ -1,4 +1,4 @@
-export const DeLex_CORE_ADDRESS = "0xDE190D2300D76B4E787140aB4f0C87Bd7cff28F7";
+export const DeLex_CORE_ADDRESS = "0x0D46A57bb98804fBbAEA637b91817574cdaD696A";
 
 export const DeLex_CORE_ABI = [
 	{
@@ -670,6 +670,40 @@ export const DeLex_CORE_ABI = [
 			}
 		],
 		"stateMutability": "pure",
+		"type": "function"
+	},
+	{
+		"inputs": [
+			{
+				"internalType": "address",
+				"name": "user",
+				"type": "address"
+			},
+			{
+				"internalType": "bytes32",
+				"name": "poolId",
+				"type": "bytes32"
+			}
+		],
+		"name": "getAvailableTokensToBorrow",
+		"outputs": [
+			{
+				"internalType": "address",
+				"name": "availableToken",
+				"type": "address"
+			},
+			{
+				"internalType": "uint256",
+				"name": "maxBorrowAmount",
+				"type": "uint256"
+			},
+			{
+				"internalType": "bool",
+				"name": "canBorrow",
+				"type": "bool"
+			}
+		],
+		"stateMutability": "view",
 		"type": "function"
 	},
 	{

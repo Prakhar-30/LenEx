@@ -19,13 +19,13 @@ export const useToken = (signer) => {
   const [loadingTokens, setLoadingTokens] = useState({});
 
   // Validate if address is a valid Ethereum address
-  const isValidAddress = (address) => {
+  const isValidAddress = useCallback((address) => {
     try {
       return ethers.utils.isAddress(address);
     } catch {
       return false;
     }
-  };
+  }, []);
 
   // Fetch token information from contract
   const fetchTokenInfo = useCallback(async (tokenAddress) => {
@@ -33,49 +33,79 @@ export const useToken = (signer) => {
       throw new Error('Invalid token address');
     }
 
+    const normalizedAddress = ethers.utils.getAddress(tokenAddress);
+
     // Return cached data if available
-    if (tokenCache[tokenAddress]) {
-      return tokenCache[tokenAddress];
+    if (tokenCache[normalizedAddress]) {
+      console.log('Returning cached token info for:', normalizedAddress);
+      return tokenCache[normalizedAddress];
     }
 
-    if (loadingTokens[tokenAddress]) {
+    if (loadingTokens[normalizedAddress]) {
       throw new Error('Token info already being fetched');
     }
 
     try {
-      setLoadingTokens(prev => ({ ...prev, [tokenAddress]: true }));
+      setLoadingTokens(prev => ({ ...prev, [normalizedAddress]: true }));
 
-      const tokenContract = new ethers.Contract(tokenAddress, ERC20_ABI, signer);
+      console.log('Fetching token info for:', normalizedAddress);
+      const tokenContract = new ethers.Contract(normalizedAddress, ERC20_ABI, signer);
       
-      // Fetch basic token info
-      const [name, symbol, decimals] = await Promise.all([
-        tokenContract.name(),
-        tokenContract.symbol(),
-        tokenContract.decimals()
-      ]);
+      // Test if the contract exists and is a valid ERC20 token
+      try {
+        await tokenContract.totalSupply();
+      } catch (error) {
+        throw new Error('Not a valid ERC20 token contract');
+      }
+      
+      // Fetch basic token info with individual error handling
+      let name, symbol, decimals;
+      
+      try {
+        name = await tokenContract.name();
+      } catch (error) {
+        console.warn('Failed to get token name:', error);
+        name = 'Unknown';
+      }
+      
+      try {
+        symbol = await tokenContract.symbol();
+      } catch (error) {
+        console.warn('Failed to get token symbol:', error);
+        symbol = 'UNK';
+      }
+      
+      try {
+        decimals = await tokenContract.decimals();
+      } catch (error) {
+        console.warn('Failed to get token decimals:', error);
+        decimals = 18; // Default to 18 decimals
+      }
 
       const tokenInfo = {
-        address: tokenAddress,
+        address: normalizedAddress,
         name,
         symbol,
         decimals,
         contract: tokenContract
       };
 
+      console.log('Token info fetched successfully:', tokenInfo);
+
       // Cache the token info
       setTokenCache(prev => ({
         ...prev,
-        [tokenAddress]: tokenInfo
+        [normalizedAddress]: tokenInfo
       }));
 
       return tokenInfo;
     } catch (error) {
-      console.error('Error fetching token info:', error);
+      console.error('Error fetching token info for', normalizedAddress, ':', error);
       throw new Error(`Failed to fetch token info: ${error.message}`);
     } finally {
-      setLoadingTokens(prev => ({ ...prev, [tokenAddress]: false }));
+      setLoadingTokens(prev => ({ ...prev, [normalizedAddress]: false }));
     }
-  }, [signer, tokenCache, loadingTokens]);
+  }, [signer, tokenCache, loadingTokens, isValidAddress]);
 
   // Get token balance for a specific user
   const getTokenBalance = useCallback(async (tokenAddress, userAddress) => {
@@ -91,7 +121,7 @@ export const useToken = (signer) => {
       console.error('Error fetching token balance:', error);
       return '0';
     }
-  }, [signer, fetchTokenInfo]);
+  }, [signer, fetchTokenInfo, isValidAddress]);
 
   // Get token allowance
   const getTokenAllowance = useCallback(async (tokenAddress, owner, spender) => {
@@ -107,7 +137,7 @@ export const useToken = (signer) => {
       console.error('Error fetching token allowance:', error);
       return '0';
     }
-  }, [signer, fetchTokenInfo]);
+  }, [signer, fetchTokenInfo, isValidAddress]);
 
   // Approve token spending
   const approveToken = useCallback(async (tokenAddress, spender, amount) => {
@@ -119,13 +149,20 @@ export const useToken = (signer) => {
       const tokenInfo = await fetchTokenInfo(tokenAddress);
       const amountWei = ethers.utils.parseUnits(amount.toString(), tokenInfo.decimals);
       
+      console.log('Approving token spend:', {
+        token: tokenAddress,
+        spender: spender,
+        amount: amount,
+        amountWei: amountWei.toString()
+      });
+      
       const tx = await tokenInfo.contract.approve(spender, amountWei);
       return tx;
     } catch (error) {
       console.error('Error approving token:', error);
       throw error;
     }
-  }, [signer, fetchTokenInfo]);
+  }, [signer, fetchTokenInfo, isValidAddress]);
 
   // Use faucet if available (for test tokens)
   const useFaucet = useCallback(async (tokenAddress) => {
@@ -135,13 +172,18 @@ export const useToken = (signer) => {
 
     try {
       const tokenInfo = await fetchTokenInfo(tokenAddress);
-      const tx = await tokenInfo.contract.faucet();
+      
+      // Check if faucet function exists
+      const faucetABI = ["function faucet() external"];
+      const faucetContract = new ethers.Contract(tokenAddress, faucetABI, signer);
+      
+      const tx = await faucetContract.faucet();
       return tx;
     } catch (error) {
       console.error('Error using faucet:', error);
       throw error;
     }
-  }, [signer, fetchTokenInfo]);
+  }, [signer, fetchTokenInfo, isValidAddress]);
 
   // Check if token has faucet function
   const hasFaucet = useCallback(async (tokenAddress) => {
@@ -150,14 +192,21 @@ export const useToken = (signer) => {
     }
 
     try {
-      const tokenInfo = await fetchTokenInfo(tokenAddress);
-      // Try to call faucet function to see if it exists
-      await tokenInfo.contract.callStatic.faucet();
+      const faucetABI = ["function faucet() external"];
+      const faucetContract = new ethers.Contract(tokenAddress, faucetABI, signer);
+      
+      // Try to call faucet function statically to see if it exists
+      await faucetContract.callStatic.faucet();
       return true;
     } catch {
       return false;
     }
-  }, [signer, fetchTokenInfo]);
+  }, [signer, isValidAddress]);
+
+  // Clear cache function
+  const clearTokenCache = useCallback(() => {
+    setTokenCache({});
+  }, []);
 
   return {
     fetchTokenInfo,
@@ -168,6 +217,7 @@ export const useToken = (signer) => {
     hasFaucet,
     isValidAddress,
     tokenCache,
+    clearTokenCache,
     loadingTokens: Object.values(loadingTokens).some(Boolean)
   };
 };

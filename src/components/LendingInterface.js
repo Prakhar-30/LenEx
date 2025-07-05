@@ -10,7 +10,7 @@ const LendingInterface = () => {
   const { account, signer } = useWallet();
   const { DeLexContract, contractsReady } = useContract(signer);
   const { fetchTokenInfo, approveToken, getTokenAllowance, getTokenBalance, isValidAddress } = useToken(signer);
-  
+  const [initialized, setInitialized] = useState(false);
   const [pools, setPools] = useState([]);
   const [userPositions, setUserPositions] = useState([]);
   const [selectedPool, setSelectedPool] = useState(null);
@@ -27,6 +27,111 @@ const LendingInterface = () => {
     totalPositions: 0,
     collateralFactor: ethers.BigNumber.from(0)
   });
+  const [availableTokenToBorrow, setAvailableTokenToBorrow] = useState(null);
+const [maxBorrowAmount, setMaxBorrowAmount] = useState('0');
+const [canBorrowFromPool, setCanBorrowFromPool] = useState(false);
+
+const checkAvailableTokensToBorrow = async () => {
+  if (!selectedPool || !account || !DeLexContract) {
+    setAvailableTokenToBorrow(null);
+    setCanBorrowFromPool(false);
+    setMaxBorrowAmount('0');
+    return;
+  }
+   try {
+    console.log('Checking available tokens to borrow for pool:', selectedPool.id);
+    
+    // Get user position to check collateral
+    const position = await DeLexContract.getUserPosition(account, selectedPool.id);
+    console.log('User position:', {
+      collateralA: position.collateralA.toString(),
+      collateralB: position.collateralB.toString(),
+      borrowedA: position.borrowedA.toString(),
+      borrowedB: position.borrowedB.toString()
+    });
+
+    const pool = await DeLexContract.getPoolInfo(selectedPool.id);
+    
+    let availableToken = null;
+    let canBorrow = false;
+    let maxAmount = '0';
+
+    // Check if user has collateral and determine what they can borrow
+    if (position.collateralA.gt(0) && position.collateralB.eq(0)) {
+      // Has tokenA as collateral, can borrow tokenB
+      availableToken = {
+        address: pool.tokenB,
+        info: await fetchTokenInfo(pool.tokenB)
+      };
+      canBorrow = true;
+      console.log('User has tokenA collateral, can borrow tokenB');
+    } else if (position.collateralB.gt(0) && position.collateralA.eq(0)) {
+      // Has tokenB as collateral, can borrow tokenA
+      availableToken = {
+        address: pool.tokenA,
+        info: await fetchTokenInfo(pool.tokenA)
+      };
+      canBorrow = true;
+      console.log('User has tokenB collateral, can borrow tokenA');
+    } else if (position.collateralA.eq(0) && position.collateralB.eq(0)) {
+      // No collateral deposited
+      console.log('No collateral deposited');
+      canBorrow = false;
+    } else {
+      // This shouldn't happen with new contract logic
+      console.log('Mixed collateral - this shouldn\'t happen');
+      canBorrow = false;
+    }
+
+    if (canBorrow && availableToken) {
+      // Calculate max borrow amount
+      const collateralValue = await DeLexContract.getCollateralValue(account, selectedPool.id);
+      const borrowValue = await DeLexContract.getBorrowValue(account, selectedPool.id);
+      const collateralFactor = await DeLexContract.COLLATERAL_FACTOR();
+      
+      const maxBorrowCapacity = collateralValue.mul(collateralFactor).div(ethers.constants.WeiPerEther);
+      
+      if (maxBorrowCapacity.gt(borrowValue)) {
+        const availableAmount = maxBorrowCapacity.sub(borrowValue);
+        maxAmount = ethers.utils.formatEther(availableAmount);
+        console.log('Max borrow amount:', maxAmount);
+      }
+
+      // Also check pool liquidity
+      const isTokenA = availableToken.address.toLowerCase() === pool.tokenA.toLowerCase();
+      const poolReserve = isTokenA ? pool.reserveA : pool.reserveB;
+      const poolLiquidity = ethers.utils.formatUnits(poolReserve, availableToken.info.decimals);
+      
+      // Take minimum of available borrow capacity and pool liquidity
+      if (parseFloat(poolLiquidity) < parseFloat(maxAmount)) {
+        maxAmount = poolLiquidity;
+        console.log('Limited by pool liquidity:', poolLiquidity);
+      }
+    }
+
+    setAvailableTokenToBorrow(availableToken);
+    setCanBorrowFromPool(canBorrow);
+    setMaxBorrowAmount(maxAmount);
+    
+    // Auto-select the available token
+    if (availableToken) {
+      setSelectedTokenAddress(availableToken.address);
+    }
+
+  } catch (error) {
+    console.error('Error checking available tokens to borrow:', error);
+    setAvailableTokenToBorrow(null);
+    setCanBorrowFromPool(false);
+    setMaxBorrowAmount('0');
+  }
+};
+
+useEffect(() => {
+  if (initialized && selectedPool && account) {
+    checkAvailableTokensToBorrow();
+  }
+}, [selectedPool, account, initialized]);
+
 
   // Withdrawal modal state
   const [withdrawalModal, setWithdrawalModal] = useState({
@@ -49,11 +154,23 @@ const LendingInterface = () => {
     repayAmount: ''
   });
 
-  useEffect(() => {
-    if (DeLexContract && contractsReady && account) {
+useEffect(() => {
+  if (contractsReady && signer && !initialized) {
+    console.log('Initializing lending interface...');
+    setInitialized(true);
+    // Only load data if we have an account
+    if (account) {
       loadData();
     }
-  }, [DeLexContract, contractsReady, account]);
+  }
+}, [contractsReady, signer, account, initialized]);
+
+useEffect(() => {
+  if (initialized && account && DeLexContract) {
+    console.log('Account connected after initialization, loading data...');
+    loadData();
+  }
+}, [initialized, account, DeLexContract]);
 
   const loadData = async () => {
     if (!DeLexContract || !account) return;
@@ -107,65 +224,83 @@ const LendingInterface = () => {
   };
 
   // FIXED: Improved user positions loading with better calculations
-  const loadUserPositions = async () => {
-    try {
-      const poolIds = await DeLexContract.getAllPools();
-      const positions = [];
-      const collateralFactor = await DeLexContract.COLLATERAL_FACTOR();
-      
-      let totalCollateralValue = ethers.BigNumber.from(0);
-      let totalBorrowedValue = ethers.BigNumber.from(0);
-      let lowestHealthFactor = ethers.constants.MaxUint256;
-      let hasAnyBorrowedAmount = false;
-      
-      for (const poolId of poolIds) {
-        try {
-          const position = await DeLexContract.getUserPosition(account, poolId);
-          const pool = await DeLexContract.getPoolInfo(poolId);
+const loadUserPositions = async () => {
+  try {
+    const poolIds = await DeLexContract.getAllPools();
+    const positions = [];
+    const collateralFactor = await DeLexContract.COLLATERAL_FACTOR();
+    
+    let totalCollateralValue = ethers.BigNumber.from(0);
+    let totalBorrowedValue = ethers.BigNumber.from(0);
+    let lowestHealthFactor = ethers.constants.MaxUint256;
+    let hasAnyBorrowedAmount = false;
+    
+    console.log('Loading user positions for pools:', poolIds.length);
+    
+    for (const poolId of poolIds) {
+      try {
+        const position = await DeLexContract.getUserPosition(account, poolId);
+        const pool = await DeLexContract.getPoolInfo(poolId);
+        
+        console.log('Position for pool', poolId, ':', {
+          collateralA: position.collateralA.toString(),
+          collateralB: position.collateralB.toString(),
+          borrowedA: position.borrowedA.toString(),
+          borrowedB: position.borrowedB.toString()
+        });
+        
+        // Check if user has any position in this pool
+        if (position.collateralA.gt(0) || position.collateralB.gt(0) || 
+            position.borrowedA.gt(0) || position.borrowedB.gt(0)) {
           
-          // Check if user has any position in this pool
-          if (position.collateralA.gt(0) || position.collateralB.gt(0) || 
-              position.borrowedA.gt(0) || position.borrowedB.gt(0)) {
+          const [tokenAInfo, tokenBInfo] = await Promise.all([
+            fetchTokenInfo(pool.tokenA),
+            fetchTokenInfo(pool.tokenB)
+          ]);
+          
+          const positionData = {
+            poolId,
+            pool,
+            tokenAInfo,
+            tokenBInfo,
+            ...position
+          };
+          
+          positions.push(positionData);
+          
+          // FIXED: Use actual token decimals for calculation
+          const collateralA = parseFloat(ethers.utils.formatUnits(position.collateralA, tokenAInfo.decimals));
+          const collateralB = parseFloat(ethers.utils.formatUnits(position.collateralB, tokenBInfo.decimals));
+          const positionCollateralValue = collateralA + collateralB;
+          
+          // FIXED: Use actual token decimals for borrowed amounts
+          const borrowedA = parseFloat(ethers.utils.formatUnits(position.borrowedA, tokenAInfo.decimals));
+          const borrowedB = parseFloat(ethers.utils.formatUnits(position.borrowedB, tokenBInfo.decimals));
+          const positionBorrowedValue = borrowedA + borrowedB;
+          
+          console.log('Calculated values for position:', {
+            collateralA,
+            collateralB,
+            borrowedA,
+            borrowedB,
+            positionCollateralValue,
+            positionBorrowedValue
+          });
+          
+          // Convert back to BigNumber for aggregation using 18 decimals for USD value
+          const collateralValueWei = ethers.utils.parseEther(positionCollateralValue.toString());
+          const borrowedValueWei = ethers.utils.parseEther(positionBorrowedValue.toString());
+          
+          totalCollateralValue = totalCollateralValue.add(collateralValueWei);
+          totalBorrowedValue = totalBorrowedValue.add(borrowedValueWei);
+          
+          // FIXED: Check if there's any borrowed amount
+          if (positionBorrowedValue > 0) {
+            hasAnyBorrowedAmount = true;
+            const collateralFactorDecimal = parseFloat(ethers.utils.formatEther(collateralFactor));
+            const maxBorrowCapacity = positionCollateralValue * collateralFactorDecimal;
             
-            const [tokenAInfo, tokenBInfo] = await Promise.all([
-              fetchTokenInfo(pool.tokenA),
-              fetchTokenInfo(pool.tokenB)
-            ]);
-            
-            const positionData = {
-              poolId,
-              pool,
-              tokenAInfo,
-              tokenBInfo,
-              ...position
-            };
-            
-            positions.push(positionData);
-            
-            // FIXED: Manual calculation instead of relying on contract view functions
-            // Calculate collateral value (simplified 1:1 ratio for now)
-            const collateralA = parseFloat(ethers.utils.formatUnits(position.collateralA, tokenAInfo.decimals));
-            const collateralB = parseFloat(ethers.utils.formatUnits(position.collateralB, tokenBInfo.decimals));
-            const positionCollateralValue = collateralA + collateralB;
-            
-            // Calculate borrowed value (simplified 1:1 ratio for now)
-            const borrowedA = parseFloat(ethers.utils.formatUnits(position.borrowedA, tokenAInfo.decimals));
-            const borrowedB = parseFloat(ethers.utils.formatUnits(position.borrowedB, tokenBInfo.decimals));
-            const positionBorrowedValue = borrowedA + borrowedB;
-            
-            // Convert back to BigNumber for aggregation
-            const collateralValueWei = ethers.utils.parseEther(positionCollateralValue.toString());
-            const borrowedValueWei = ethers.utils.parseEther(positionBorrowedValue.toString());
-            
-            totalCollateralValue = totalCollateralValue.add(collateralValueWei);
-            totalBorrowedValue = totalBorrowedValue.add(borrowedValueWei);
-            
-            // FIXED: Proper health factor calculation
-            if (positionBorrowedValue > 0) {
-              hasAnyBorrowedAmount = true;
-              // Health factor = (collateralValue * collateralFactor) / borrowedValue
-              const collateralFactorDecimal = parseFloat(ethers.utils.formatEther(collateralFactor));
-              const maxBorrowCapacity = positionCollateralValue * collateralFactorDecimal;
+            if (maxBorrowCapacity > 0) {
               const healthFactor = maxBorrowCapacity / positionBorrowedValue;
               
               console.log(`Position health factor calculation:`, {
@@ -177,40 +312,43 @@ const LendingInterface = () => {
               });
               
               if (healthFactor < parseFloat(ethers.utils.formatEther(lowestHealthFactor))) {
-                lowestHealthFactor = ethers.utils.parseEther(healthFactor.toString());
+                lowestHealthFactor = ethers.utils.parseEther(Math.max(0, healthFactor).toString());
               }
             }
           }
-        } catch (positionError) {
-          console.error(`Error loading position for pool ${poolId}:`, positionError);
         }
+      } catch (positionError) {
+        console.error(`Error loading position for pool ${poolId}:`, positionError);
       }
-      
-      // Calculate available to borrow
-      const maxBorrowCapacity = totalCollateralValue.mul(collateralFactor).div(ethers.constants.WeiPerEther);
-      const totalAvailableToBorrow = maxBorrowCapacity.sub(totalBorrowedValue);
-      
-      console.log('Dashboard stats calculation:', {
-        totalCollateralValue: ethers.utils.formatEther(totalCollateralValue),
-        totalBorrowedValue: ethers.utils.formatEther(totalBorrowedValue),
-        totalAvailableToBorrow: ethers.utils.formatEther(totalAvailableToBorrow),
-        hasAnyBorrowedAmount,
-        positionsCount: positions.length
-      });
-      
-      setUserPositions(positions);
-      setDashboardStats({
-        totalCollateralValue,
-        totalBorrowedValue,
-        totalAvailableToBorrow: totalAvailableToBorrow.gt(0) ? totalAvailableToBorrow : ethers.BigNumber.from(0),
-        overallHealthFactor: hasAnyBorrowedAmount ? lowestHealthFactor : ethers.BigNumber.from(0),
-        totalPositions: positions.length,
-        collateralFactor
-      });
-    } catch (error) {
-      console.error('Error loading user positions:', error);
     }
-  };
+    
+    // Calculate available to borrow
+    const maxBorrowCapacity = totalCollateralValue.mul(collateralFactor).div(ethers.constants.WeiPerEther);
+    const totalAvailableToBorrow = maxBorrowCapacity.gt(totalBorrowedValue) ? 
+      maxBorrowCapacity.sub(totalBorrowedValue) : ethers.BigNumber.from(0);
+    
+    console.log('Final dashboard stats calculation:', {
+      totalCollateralValue: ethers.utils.formatEther(totalCollateralValue),
+      totalBorrowedValue: ethers.utils.formatEther(totalBorrowedValue),
+      totalAvailableToBorrow: ethers.utils.formatEther(totalAvailableToBorrow),
+      hasAnyBorrowedAmount,
+      positionsCount: positions.length,
+      lowestHealthFactor: hasAnyBorrowedAmount ? ethers.utils.formatEther(lowestHealthFactor) : 'N/A'
+    });
+    
+    setUserPositions(positions);
+    setDashboardStats({
+      totalCollateralValue,
+      totalBorrowedValue,
+      totalAvailableToBorrow,
+      overallHealthFactor: hasAnyBorrowedAmount ? lowestHealthFactor : ethers.BigNumber.from(0),
+      totalPositions: positions.length,
+      collateralFactor
+    });
+  } catch (error) {
+    console.error('Error loading user positions:', error);
+  }
+};
 
   // Calculate maximum withdrawable amount without becoming undercollateralized
   const calculateMaxWithdrawable = async (poolId, tokenAddress, tokenInfo, currentCollateral) => {
@@ -423,45 +561,70 @@ const LendingInterface = () => {
     }
   };
 
-  const borrowTokens = async () => {
-    if (!account || !DeLexContract || !selectedPool || !amount || !isValidAddress(selectedTokenAddress)) {
-      toast.error('Please fill all required fields');
+const borrowTokens = async () => {
+  if (!account || !DeLexContract || !selectedPool || !amount || !isValidAddress(selectedTokenAddress)) {
+    toast.error('Please fill all required fields');
+    return;
+  }
+
+  if (!canBorrowFromPool) {
+    toast.error('You need to deposit collateral first to borrow from this pool');
+    return;
+  }
+
+  if (!availableTokenToBorrow || selectedTokenAddress.toLowerCase() !== availableTokenToBorrow.address.toLowerCase()) {
+    toast.error(`You can only borrow ${availableTokenToBorrow?.info?.symbol || 'the other token'} from this pool based on your collateral`);
+    return;
+  }
+  
+  try {
+    setLoading(true);
+    
+    const tokenInfo = await fetchTokenInfo(selectedTokenAddress);
+    const amountWei = ethers.utils.parseUnits(amount, tokenInfo.decimals);
+    
+    // Check if amount exceeds max borrowable
+    if (parseFloat(amount) > parseFloat(maxBorrowAmount)) {
+      toast.error(`Maximum borrowable amount is ${parseFloat(maxBorrowAmount).toFixed(4)} ${tokenInfo.symbol}`);
       return;
     }
     
-    try {
-      setLoading(true);
-      
-      const tokenInfo = await fetchTokenInfo(selectedTokenAddress);
-      const amountWei = ethers.utils.parseUnits(amount, tokenInfo.decimals);
-      
-      toast.loading(`Borrowing ${tokenInfo.symbol}...`);
-      const tx = await DeLexContract.borrow(selectedPool.id, selectedTokenAddress, amountWei);
-      await tx.wait();
-      
-      toast.dismiss();
-      toast.success(`Borrowed: ${amount} ${tokenInfo.symbol}`);
-      
-      setAmount('');
-      loadData();
-    } catch (error) {
-      toast.dismiss();
-      let errorMessage = 'Failed to borrow tokens';
-      
-      if (error.message.includes('Insufficient collateral')) {
-        errorMessage = 'Insufficient collateral - deposit more collateral or borrow less';
-      } else if (error.message.includes('Insufficient liquidity')) {
-        errorMessage = 'Insufficient liquidity in the pool for this borrow amount';
-      } else if (error.message.includes('Invalid token')) {
-        errorMessage = 'Invalid token - token must be part of the selected pool';
-      }
-      
-      toast.error(errorMessage);
-      console.error('Borrow error:', error);
-    } finally {
-      setLoading(false);
+    toast.loading(`Borrowing ${tokenInfo.symbol}...`);
+    const tx = await DeLexContract.borrow(selectedPool.id, selectedTokenAddress, amountWei);
+    await tx.wait();
+    
+    toast.dismiss();
+    toast.success(`Borrowed: ${amount} ${tokenInfo.symbol}`);
+    
+    setAmount('');
+    loadData();
+    checkAvailableTokensToBorrow(); // Refresh available amounts
+    
+  } catch (error) {
+    toast.dismiss();
+    let errorMessage = 'Failed to borrow tokens';
+    
+    if (error.message.includes('Must deposit tokenB as collateral to borrow tokenA')) {
+      errorMessage = 'You need to deposit the other token as collateral first';
+    } else if (error.message.includes('Must deposit tokenA as collateral to borrow tokenB')) {
+      errorMessage = 'You need to deposit the other token as collateral first';
+    } else if (error.message.includes('Cannot borrow tokenA if you have tokenA as collateral')) {
+      errorMessage = 'Cannot borrow the same token you deposited as collateral';
+    } else if (error.message.includes('Cannot borrow tokenB if you have tokenB as collateral')) {
+      errorMessage = 'Cannot borrow the same token you deposited as collateral';
+    } else if (error.message.includes('Insufficient collateral')) {
+      errorMessage = 'Insufficient collateral - deposit more collateral or borrow less';
+    } else if (error.message.includes('Insufficient liquidity')) {
+      errorMessage = 'Insufficient liquidity in the pool for this borrow amount';
     }
-  };
+    
+    toast.error(errorMessage);
+    console.error('Borrow error:', error);
+  } finally {
+    setLoading(false);
+  }
+};
+
 
   const repayTokens = async () => {
     if (!account || !DeLexContract || !selectedPool || !amount || !isValidAddress(selectedTokenAddress)) {
@@ -787,29 +950,32 @@ const LendingInterface = () => {
     }
   };
 
-  if (!contractsReady) {
-    return (
-      <div className="max-w-6xl mx-auto">
-        <div className="flex justify-center items-center py-12">
-          <div className="text-electric-purple font-cyber text-lg animate-pulse">
-            Initializing contracts...
-          </div>
+  if (!contractsReady || !signer) {
+  return (
+    <div className="max-w-6xl mx-auto">
+      <div className="flex justify-center items-center py-12">
+        <div className="text-electric-purple font-cyber text-lg animate-pulse">
+          Initializing contracts...
         </div>
       </div>
-    );
-  }
+    </div>
+  );
+}
 
   if (!account) {
     return (
       <div className="max-w-6xl mx-auto">
-        <div className="flex justify-center items-center py-12">
-          <div className="cyber-card border-laser-orange rounded-xl p-8 text-center">
-            <div className="text-laser-orange font-cyber text-lg mb-4">
-              Wallet Not Connected
-            </div>
-            <p className="text-gray-400">Please connect your wallet to access lending features</p>
+        {/* Show wallet connection prompt inside component if needed */}
+    {!account && (
+      <div className="mb-6">
+        <div className="cyber-card border-laser-orange rounded-xl p-8 text-center">
+          <div className="text-laser-orange font-cyber text-lg mb-4">
+            Wallet Not Connected
           </div>
+          <p className="text-gray-400">Please connect your wallet to access lending features</p>
         </div>
+      </div>
+    )}
       </div>
     );
   }

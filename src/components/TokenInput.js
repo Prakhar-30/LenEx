@@ -1,11 +1,10 @@
 import React, { useState, useEffect } from 'react';
+import { ethers } from 'ethers';
 import { useToken } from '../hooks/useToken';
 import { useWallet } from '../hooks/useWallet';
 
 const TokenInput = ({ 
   label, 
-  value, 
-  onChange, 
   tokenAddress, 
   onTokenChange, 
   amount, 
@@ -36,20 +35,25 @@ const TokenInput = ({
 
   // Load balance when token or account changes
   useEffect(() => {
-    if (tokenInfo && account) {
+    if (tokenInfo && account && showBalance) {
       loadBalance();
     }
-  }, [tokenInfo, account]);
+  }, [tokenInfo, account, showBalance]);
 
   const loadTokenInfo = async () => {
+    if (!signer || !tokenAddress || !isValidAddress(tokenAddress)) return;
+    
     try {
       setLoading(true);
       setError('');
       
+      console.log('Loading token info for:', tokenAddress);
       const info = await fetchTokenInfo(tokenAddress);
       setTokenInfo(info);
+      console.log('Token info loaded:', info);
       
     } catch (err) {
+      console.error('Error loading token info:', err);
       setError(err.message);
       setTokenInfo(null);
     } finally {
@@ -80,6 +84,8 @@ const TokenInput = ({
     }
   };
 
+  const isValidAddr = tokenAddress && isValidAddress(tokenAddress);
+
   return (
     <div className="space-y-3">
       {/* Label and Balance */}
@@ -107,8 +113,15 @@ const TokenInput = ({
           value={tokenAddress}
           onChange={handleAddressChange}
           placeholder={placeholder}
-          className="w-full bg-black border border-gray-600 rounded-lg px-3 py-2 text-white font-cyber text-sm"
+          className={`w-full bg-black border rounded-lg px-3 py-2 text-white font-cyber text-sm ${
+            isValidAddr ? 'border-gray-600' : tokenAddress ? 'border-red-500' : 'border-gray-600'
+          }`}
         />
+        
+        {/* Address validation */}
+        {tokenAddress && !isValidAddr && (
+          <div className="text-red-400 text-xs">Invalid token address</div>
+        )}
         
         {/* Token Info Display */}
         {loading && (

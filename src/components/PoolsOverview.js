@@ -4,7 +4,7 @@ import { useContract } from '../hooks/useContract';
 import PoolCard from './PoolCard';
 import { ethers } from 'ethers';
 
-const PoolsOverview = ({ onPoolSelect, selectedPoolId, showActions = true }) => {
+const PoolsOverview = ({ onPoolSelect, selectedPoolId }) => {
   const { account, signer } = useWallet();
   const { DeLexContract, contractsReady } = useContract(signer);
   
@@ -132,7 +132,7 @@ const PoolsOverview = ({ onPoolSelect, selectedPoolId, showActions = true }) => 
           <div className="text-laser-orange font-cyber text-lg mb-4">
             Wallet Not Connected
           </div>
-          <p className="text-gray-400">Please connect your wallet to view pools</p>
+          <p className="text-gray-400">Connect your wallet to view detailed pool information</p>
         </div>
       </div>
     );
@@ -243,17 +243,31 @@ const PoolsOverview = ({ onPoolSelect, selectedPoolId, showActions = true }) => 
           </div>
           <p className="text-gray-500 mb-6">
             {pools.length === 0 
-              ? "No pools have been created yet. Be the first to create a liquidity pool!"
+              ? "No pools have been created yet. Visit the Liquidity page to create the first pool!"
               : "No pools match your current filter criteria."
             }
           </p>
           {pools.length === 0 && (
-            <button
-              onClick={() => window.location.href = '/liquidity'}
-              className="px-6 py-3 bg-neon-green text-black font-cyber rounded-lg hover:bg-opacity-80 transition-all"
-            >
-              Create First Pool
-            </button>
+            <div className="space-y-3">
+              <a
+                href="/liquidity"
+                className="inline-block px-6 py-3 bg-neon-green text-black font-cyber rounded-lg hover:bg-opacity-80 transition-all mr-3"
+              >
+                Create First Pool
+              </a>
+              <a
+                href="/swap"
+                className="inline-block px-6 py-3 bg-cyber-blue text-black font-cyber rounded-lg hover:bg-opacity-80 transition-all mr-3"
+              >
+                Swap Tokens
+              </a>
+              <a
+                href="/lending"
+                className="inline-block px-6 py-3 bg-hot-pink text-black font-cyber rounded-lg hover:bg-opacity-80 transition-all"
+              >
+                Lend & Borrow
+              </a>
+            </div>
           )}
         </div>
       ) : (
@@ -264,27 +278,41 @@ const PoolsOverview = ({ onPoolSelect, selectedPoolId, showActions = true }) => 
               pool={pool}
               onSelectPool={onPoolSelect}
               isSelected={selectedPoolId === pool.id}
-              showActions={showActions}
+              showActions={false}
             />
           ))}
         </div>
       )}
 
-      {/* Create New Pool CTA */}
+      {/* Navigation CTA */}
       {pools.length > 0 && (
         <div className="cyber-card border-electric-purple rounded-xl p-6 text-center thin-neon-border">
           <h3 className="text-xl font-cyber text-electric-purple mb-2">
-            Don't see your desired trading pair?
+            Ready to start using DeFi?
           </h3>
           <p className="text-gray-400 mb-4">
-            Create a new liquidity pool and start earning fees from trades
+            Choose your DeFi strategy and navigate to the appropriate section
           </p>
-          <button
-            onClick={() => window.location.href = '/liquidity'}
-            className="px-6 py-3 bg-electric-purple text-black font-cyber rounded-lg hover:bg-opacity-80 transition-all"
-          >
-            Create New Pool
-          </button>
+          <div className="flex flex-wrap justify-center gap-3">
+            <a
+              href="/swap"
+              className="px-6 py-3 bg-neon-green text-black font-cyber rounded-lg hover:bg-opacity-80 transition-all"
+            >
+              🔄 Swap Tokens
+            </a>
+            <a
+              href="/liquidity"
+              className="px-6 py-3 bg-electric-purple text-black font-cyber rounded-lg hover:bg-opacity-80 transition-all"
+            >
+              💧 Add Liquidity
+            </a>
+            <a
+              href="/lending"
+              className="px-6 py-3 bg-hot-pink text-black font-cyber rounded-lg hover:bg-opacity-80 transition-all"
+            >
+              🏦 Lend & Borrow
+            </a>
+          </div>
         </div>
       )}
     </div>
