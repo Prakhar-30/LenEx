@@ -283,8 +283,6 @@ const PoolsOverview = ({ onPoolSelect, selectedPoolId }) => {
           ))}
         </div>
       )}
-
-      {/* REMOVED: Navigation CTA section has been completely removed */}
     </div>
   );
 };

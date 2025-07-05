@@ -1,4 +1,4 @@
-export const DeLex_CORE_ADDRESS = "0x5f51aF08B27b0C44EdB8B5779De4C41A40B454b5";
+export const DeLex_CORE_ADDRESS = "0x0Be9c90Ea6C387b974888dE1C21c6a0F96bC50C6";
 
 export const DeLex_CORE_ABI = [
 	{
