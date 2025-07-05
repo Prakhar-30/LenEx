@@ -46,6 +46,17 @@ const LendingInterface = () => {
     loading: false
   });
 
+  // ENHANCED: Withdrawal state for collateral withdrawal functionality
+  const [withdrawalState, setWithdrawalState] = useState({
+    canWithdraw: false,
+    withdrawableTokens: [], // Array of tokens that can be withdrawn
+    maxWithdrawableAmounts: {}, // Token address -> max withdrawable amount
+    selectedWithdrawToken: null,
+    withdrawAmount: '',
+    loading: false,
+    error: null
+  });
+
   // Modal states
   const [withdrawalModal, setWithdrawalModal] = useState({
     isOpen: false,
@@ -65,7 +76,6 @@ const LendingInterface = () => {
     currentBorrowed: '0',
     repayAmount: ''
   });
-
   // Initialize component when contracts are ready
   useEffect(() => {
     if (contractsReady && signer && !initialized) {
@@ -90,9 +100,11 @@ const LendingInterface = () => {
     if (initialized && selectedPool && account) {
       loadPoolSpecificStats();
       checkBorrowingAvailability();
+      checkWithdrawalAvailability(); // NEW: Check withdrawal availability
     } else {
       resetPoolStats();
       resetBorrowingState();
+      resetWithdrawalState(); // NEW: Reset withdrawal state
     }
   }, [selectedPool, account, initialized]);
 
@@ -102,6 +114,16 @@ const LendingInterface = () => {
       setSelectedTokenAddress(borrowingState.availableTokenToBorrow.address);
     }
   }, [borrowingState, activeTab]);
+
+  // NEW: Auto-set token address when withdrawal state changes
+  useEffect(() => {
+    if (withdrawalState.canWithdraw && withdrawalState.withdrawableTokens.length > 0 && activeTab === 'withdraw') {
+      // Auto-select the first withdrawable token if none selected
+      if (!selectedTokenAddress || !withdrawalState.withdrawableTokens.find(t => t.address.toLowerCase() === selectedTokenAddress.toLowerCase())) {
+        setSelectedTokenAddress(withdrawalState.withdrawableTokens[0].address);
+      }
+    }
+  }, [withdrawalState, activeTab]);
 
   // Load all data
   const loadData = async () => {
@@ -188,7 +210,6 @@ const LendingInterface = () => {
       console.error('Error loading user positions:', error);
     }
   };
-
   // Load pool-specific stats
   const loadPoolSpecificStats = async () => {
     if (!selectedPool || !account || !DeLexContract) {
@@ -398,6 +419,170 @@ const LendingInterface = () => {
     }
   };
 
+  // NEW: Check withdrawal availability with collateral constraint validation
+// NEW: Check withdrawal availability with FIXED decimal handling
+const checkWithdrawalAvailability = async () => {
+  if (!selectedPool || !account || !DeLexContract) {
+    resetWithdrawalState();
+    return;
+  }
+
+  try {
+    setWithdrawalState(prev => ({ ...prev, loading: true, error: null }));
+    console.log('Checking withdrawal availability for pool:', selectedPool.id);
+    
+    const position = await DeLexContract.getUserPosition(account, selectedPool.id);
+    const collateralFactor = await DeLexContract.COLLATERAL_FACTOR();
+    
+    // Check if user has any collateral
+    const hasCollateralA = position.collateralA.gt(0);
+    const hasCollateralB = position.collateralB.gt(0);
+    
+    if (!hasCollateralA && !hasCollateralB) {
+      setWithdrawalState({
+        canWithdraw: false,
+        withdrawableTokens: [],
+        maxWithdrawableAmounts: {},
+        selectedWithdrawToken: null,
+        withdrawAmount: '',
+        loading: false,
+        error: 'No collateral deposited in this pool'
+      });
+      return;
+    }
+
+    const withdrawableTokens = [];
+    const maxWithdrawableAmounts = {};
+    
+    // FIXED: Use contract's built-in functions for value calculations
+    const totalBorrowedValue = await DeLexContract.getBorrowValue(account, selectedPool.id);
+    const totalCollateralValue = await DeLexContract.getCollateralValue(account, selectedPool.id);
+    
+    console.log('Contract values:', {
+      totalBorrowedValue: ethers.utils.formatEther(totalBorrowedValue),
+      totalCollateralValue: ethers.utils.formatEther(totalCollateralValue),
+      collateralFactor: ethers.utils.formatEther(collateralFactor)
+    });
+    
+    // If user has collateral in tokenA
+    if (hasCollateralA) {
+      let maxWithdrawableA = ethers.BigNumber.from(0);
+      
+      if (totalBorrowedValue.eq(0)) {
+        // No debt, can withdraw all collateral
+        maxWithdrawableA = position.collateralA;
+      } else {
+        // Has debt, must maintain collateral ratio
+        const minRequiredCollateralValue = totalBorrowedValue.mul(ethers.constants.WeiPerEther).div(collateralFactor);
+        
+        if (totalCollateralValue.gt(minRequiredCollateralValue)) {
+          const maxWithdrawableValue = totalCollateralValue.sub(minRequiredCollateralValue);
+          
+          // Convert the withdrawable value back to tokenA amount
+          // Since we're using 1:1 value ratio, this is straightforward
+          const collateralAValue = ethers.utils.parseEther(
+            ethers.utils.formatUnits(position.collateralA, selectedPool.tokenAInfo.decimals)
+          );
+          
+          if (maxWithdrawableValue.gte(collateralAValue)) {
+            maxWithdrawableA = position.collateralA;
+          } else {
+            // Calculate proportional amount
+            const withdrawableRatio = maxWithdrawableValue.mul(ethers.constants.WeiPerEther).div(collateralAValue);
+            maxWithdrawableA = position.collateralA.mul(withdrawableRatio).div(ethers.constants.WeiPerEther);
+          }
+        }
+      }
+      
+      if (maxWithdrawableA.gt(0)) {
+        // FIXED: Direct formatting without conversion
+        const maxWithdrawableAmount = ethers.utils.formatUnits(maxWithdrawableA, selectedPool.tokenAInfo.decimals);
+        
+        withdrawableTokens.push({
+          address: selectedPool.tokenA,
+          info: selectedPool.tokenAInfo,
+          currentCollateral: position.collateralA
+        });
+        
+        maxWithdrawableAmounts[selectedPool.tokenA.toLowerCase()] = maxWithdrawableAmount;
+        console.log(`TokenA withdrawable: ${maxWithdrawableAmount} ${selectedPool.tokenAInfo.symbol}`);
+      }
+    }
+    
+    // If user has collateral in tokenB
+    if (hasCollateralB) {
+      let maxWithdrawableB = ethers.BigNumber.from(0);
+      
+      if (totalBorrowedValue.eq(0)) {
+        // No debt, can withdraw all collateral
+        maxWithdrawableB = position.collateralB;
+      } else {
+        // Has debt, must maintain collateral ratio
+        const minRequiredCollateralValue = totalBorrowedValue.mul(ethers.constants.WeiPerEther).div(collateralFactor);
+        
+        if (totalCollateralValue.gt(minRequiredCollateralValue)) {
+          const maxWithdrawableValue = totalCollateralValue.sub(minRequiredCollateralValue);
+          
+          // Convert the withdrawable value back to tokenB amount
+          // Since we're using 1:1 value ratio, this is straightforward
+          const collateralBValue = ethers.utils.parseEther(
+            ethers.utils.formatUnits(position.collateralB, selectedPool.tokenBInfo.decimals)
+          );
+          
+          if (maxWithdrawableValue.gte(collateralBValue)) {
+            maxWithdrawableB = position.collateralB;
+          } else {
+            // Calculate proportional amount
+            const withdrawableRatio = maxWithdrawableValue.mul(ethers.constants.WeiPerEther).div(collateralBValue);
+            maxWithdrawableB = position.collateralB.mul(withdrawableRatio).div(ethers.constants.WeiPerEther);
+          }
+        }
+      }
+      
+      if (maxWithdrawableB.gt(0)) {
+        // FIXED: Direct formatting without conversion
+        const maxWithdrawableAmount = ethers.utils.formatUnits(maxWithdrawableB, selectedPool.tokenBInfo.decimals);
+        
+        withdrawableTokens.push({
+          address: selectedPool.tokenB,
+          info: selectedPool.tokenBInfo,
+          currentCollateral: position.collateralB
+        });
+        
+        maxWithdrawableAmounts[selectedPool.tokenB.toLowerCase()] = maxWithdrawableAmount;
+        console.log(`TokenB withdrawable: ${maxWithdrawableAmount} ${selectedPool.tokenBInfo.symbol}`);
+      }
+    }
+    
+    console.log('Withdrawal availability check result:', {
+      canWithdraw: withdrawableTokens.length > 0,
+      withdrawableTokens: withdrawableTokens.map(t => t.info.symbol),
+      maxWithdrawableAmounts
+    });
+    
+    setWithdrawalState({
+      canWithdraw: withdrawableTokens.length > 0,
+      withdrawableTokens,
+      maxWithdrawableAmounts,
+      selectedWithdrawToken: withdrawableTokens.length > 0 ? withdrawableTokens[0] : null,
+      withdrawAmount: '',
+      loading: false,
+      error: withdrawableTokens.length === 0 ? 'Cannot withdraw collateral - would make position undercollateralized' : null
+    });
+
+  } catch (error) {
+    console.error('Error checking withdrawal availability:', error);
+    setWithdrawalState({
+      canWithdraw: false,
+      withdrawableTokens: [],
+      maxWithdrawableAmounts: {},
+      selectedWithdrawToken: null,
+      withdrawAmount: '',
+      loading: false,
+      error: `Error checking withdrawal availability: ${error.message}`
+    });
+  }
+};
   // Reset functions
   const resetPoolStats = () => {
     setPoolStats({
@@ -423,75 +608,76 @@ const LendingInterface = () => {
     });
   };
 
-  // FIXED: Enhanced deposit collateral with better validation
-  const depositCollateral = async () => {
+  // NEW: Withdraw collateral function with proper validation
+  const withdrawCollateral = async () => {
     if (!account || !DeLexContract || !selectedPool || !amount || !isValidAddress(selectedTokenAddress)) {
       toast.error('Please fill all required fields');
       return;
     }
-    
+
+    if (!withdrawalState.canWithdraw) {
+      toast.error(withdrawalState.error || 'No collateral available for withdrawal');
+      return;
+    }
+
+    // Find the selected token in withdrawable tokens
+    const selectedWithdrawToken = withdrawalState.withdrawableTokens.find(
+      token => token.address.toLowerCase() === selectedTokenAddress.toLowerCase()
+    );
+
+    if (!selectedWithdrawToken) {
+      toast.error('Selected token is not available for withdrawal');
+      return;
+    }
+
+    const maxWithdrawable = withdrawalState.maxWithdrawableAmounts[selectedTokenAddress.toLowerCase()];
+    const withdrawAmount = parseFloat(amount);
+    const maxWithdrawableAmount = parseFloat(maxWithdrawable);
+
+    if (withdrawAmount <= 0) {
+      toast.error('Amount must be greater than 0');
+      return;
+    }
+
+    if (withdrawAmount > maxWithdrawableAmount) {
+      toast.error(`Maximum withdrawable amount is ${maxWithdrawableAmount.toFixed(6)} ${selectedWithdrawToken.info.symbol}`);
+      return;
+    }
+
     try {
       setLoading(true);
       
-      const tokenInfo = await fetchTokenInfo(selectedTokenAddress);
+      const tokenInfo = selectedWithdrawToken.info;
       const amountWei = ethers.utils.parseUnits(amount, tokenInfo.decimals);
       
-      // Check if this token is part of the selected pool
-      const isValidToken = selectedTokenAddress.toLowerCase() === selectedPool.tokenA.toLowerCase() || 
-                          selectedTokenAddress.toLowerCase() === selectedPool.tokenB.toLowerCase();
-      
-      if (!isValidToken) {
-        toast.error('Token must be part of the selected pool');
-        return;
-      }
-      
-      // Check user balance
-      const userBalance = await getTokenBalance(selectedTokenAddress, account);
-      const userBalanceBN = ethers.utils.parseUnits(userBalance, tokenInfo.decimals);
-      
-      if (amountWei.gt(userBalanceBN)) {
-        toast.error(`Insufficient balance. You have ${userBalance} ${tokenInfo.symbol}`);
-        return;
-      }
-      
-      // Check allowance and approve if needed
-      const currentAllowance = await getTokenAllowance(selectedTokenAddress, account, DeLexContract.address);
-      const currentAllowanceWei = ethers.utils.parseUnits(currentAllowance, tokenInfo.decimals);
-      
-      if (currentAllowanceWei.lt(amountWei)) {
-        toast.loading(`Approving ${tokenInfo.symbol}...`);
-        const approveTx = await approveToken(selectedTokenAddress, DeLexContract.address, amount);
-        await approveTx.wait();
-      }
-      
-      toast.loading('Depositing collateral...');
-      const tx = await DeLexContract.depositCollateral(selectedPool.id, selectedTokenAddress, amountWei);
+      toast.loading(`Withdrawing ${tokenInfo.symbol}...`);
+      const tx = await DeLexContract.withdrawCollateral(selectedPool.id, selectedTokenAddress, amountWei);
       await tx.wait();
       
       toast.dismiss();
-      toast.success(`Collateral deposited: ${amount} ${tokenInfo.symbol}`);
+      toast.success(`Withdrawn: ${amount} ${tokenInfo.symbol}`);
       
       setAmount('');
       await loadData();
       await loadPoolSpecificStats();
       await checkBorrowingAvailability();
+      await checkWithdrawalAvailability();
+      
     } catch (error) {
       toast.dismiss();
       
-      let errorMessage = 'Failed to deposit collateral';
+      let errorMessage = 'Failed to withdraw collateral';
       
-      if (error.message.includes('Cannot deposit tokenA as collateral if you have tokenB position')) {
-        errorMessage = 'Cannot deposit this token as collateral - you already have a position with the other token in this pool';
-      } else if (error.message.includes('Cannot deposit tokenB as collateral if you have tokenA position')) {
-        errorMessage = 'Cannot deposit this token as collateral - you already have a position with the other token in this pool';
-      } else if (error.message.includes('ERC20InsufficientBalance')) {
-        errorMessage = 'Insufficient token balance';
-      } else if (error.message.includes('ERC20InsufficientAllowance')) {
-        errorMessage = 'Token approval failed';
+      if (error.message.includes('Would be undercollateralized')) {
+        errorMessage = 'Cannot withdraw - would make your position undercollateralized';
+      } else if (error.message.includes('Insufficient collateral')) {
+        errorMessage = 'Insufficient collateral balance';
+      } else if (error.message.includes('Invalid token')) {
+        errorMessage = 'Selected token is not part of this pool';
       }
       
       toast.error(errorMessage);
-      console.error('Deposit error:', error);
+      console.error('Withdraw error:', error);
     } finally {
       setLoading(false);
     }
@@ -550,6 +736,7 @@ const LendingInterface = () => {
       await loadData();
       await loadPoolSpecificStats();
       await checkBorrowingAvailability();
+      await checkWithdrawalAvailability(); // NEW: Refresh withdrawal availability after borrowing
       
     } catch (error) {
       toast.dismiss();
@@ -644,6 +831,7 @@ const LendingInterface = () => {
       await loadData();
       await loadPoolSpecificStats();
       await checkBorrowingAvailability();
+      await checkWithdrawalAvailability(); // NEW: Refresh withdrawal availability after repaying
     } catch (error) {
       toast.dismiss();
       
@@ -664,9 +852,95 @@ const LendingInterface = () => {
     } finally {
       setLoading(false);
     }
+  }; 
+
+  const resetWithdrawalState = () => {
+    setWithdrawalState({
+      canWithdraw: false,
+      withdrawableTokens: [],
+      maxWithdrawableAmounts: {},
+      selectedWithdrawToken: null,
+      withdrawAmount: '',
+      loading: false,
+      error: null
+    });
   };
 
-  // Utility functions
+  // FIXED: Enhanced deposit collateral with better validation
+  const depositCollateral = async () => {
+    if (!account || !DeLexContract || !selectedPool || !amount || !isValidAddress(selectedTokenAddress)) {
+      toast.error('Please fill all required fields');
+      return;
+    }
+    
+    try {
+      setLoading(true);
+      
+      const tokenInfo = await fetchTokenInfo(selectedTokenAddress);
+      const amountWei = ethers.utils.parseUnits(amount, tokenInfo.decimals);
+      
+      // Check if this token is part of the selected pool
+      const isValidToken = selectedTokenAddress.toLowerCase() === selectedPool.tokenA.toLowerCase() || 
+                          selectedTokenAddress.toLowerCase() === selectedPool.tokenB.toLowerCase();
+      
+      if (!isValidToken) {
+        toast.error('Token must be part of the selected pool');
+        return;
+      }
+      
+      // Check user balance
+      const userBalance = await getTokenBalance(selectedTokenAddress, account);
+      const userBalanceBN = ethers.utils.parseUnits(userBalance, tokenInfo.decimals);
+      
+      if (amountWei.gt(userBalanceBN)) {
+        toast.error(`Insufficient balance. You have ${userBalance} ${tokenInfo.symbol}`);
+        return;
+      }
+      
+      // Check allowance and approve if needed
+      const currentAllowance = await getTokenAllowance(selectedTokenAddress, account, DeLexContract.address);
+      const currentAllowanceWei = ethers.utils.parseUnits(currentAllowance, tokenInfo.decimals);
+      
+      if (currentAllowanceWei.lt(amountWei)) {
+        toast.loading(`Approving ${tokenInfo.symbol}...`);
+        const approveTx = await approveToken(selectedTokenAddress, DeLexContract.address, amount);
+        await approveTx.wait();
+      }
+      
+      toast.loading('Depositing collateral...');
+      const tx = await DeLexContract.depositCollateral(selectedPool.id, selectedTokenAddress, amountWei);
+      await tx.wait();
+      
+      toast.dismiss();
+      toast.success(`Collateral deposited: ${amount} ${tokenInfo.symbol}`);
+      
+      setAmount('');
+      await loadData();
+      await loadPoolSpecificStats();
+      await checkBorrowingAvailability();
+      await checkWithdrawalAvailability(); // NEW: Refresh withdrawal availability
+    } catch (error) {
+      toast.dismiss();
+      
+      let errorMessage = 'Failed to deposit collateral';
+      
+      if (error.message.includes('Cannot deposit tokenA as collateral if you have tokenB position')) {
+        errorMessage = 'Cannot deposit this token as collateral - you already have a position with the other token in this pool';
+      } else if (error.message.includes('Cannot deposit tokenB as collateral if you have tokenA position')) {
+        errorMessage = 'Cannot deposit this token as collateral - you already have a position with the other token in this pool';
+      } else if (error.message.includes('ERC20InsufficientBalance')) {
+        errorMessage = 'Insufficient token balance';
+      } else if (error.message.includes('ERC20InsufficientAllowance')) {
+        errorMessage = 'Token approval failed';
+      }
+      
+      toast.error(errorMessage);
+      console.error('Deposit error:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+// Utility functions
   const formatAmount = (amount, decimals = 18) => {
     try {
       const formatted = parseFloat(ethers.utils.formatUnits(amount, decimals));
@@ -755,9 +1029,9 @@ const LendingInterface = () => {
     );
   }
 
-        return (
+  return (
     <div className="max-w-6xl mx-auto">
-      {/* Tab Navigation */}
+      {/* Tab Navigation - ENHANCED: Added Withdraw tab */}
       <div className="flex mb-6 overflow-x-auto">
         <button
           onClick={() => setActiveTab('dashboard')}
@@ -778,6 +1052,16 @@ const LendingInterface = () => {
           }`}
         >
           Deposit
+        </button>
+        <button
+          onClick={() => setActiveTab('withdraw')}
+          className={`px-6 py-3 font-cyber text-lg transition-all whitespace-nowrap ${
+            activeTab === 'withdraw'
+              ? 'bg-laser-orange text-black'
+              : 'bg-gray-800 text-gray-300 hover:bg-gray-700'
+          }`}
+        >
+          Withdraw
         </button>
         <button
           onClick={() => setActiveTab('borrow')}
@@ -896,6 +1180,32 @@ const LendingInterface = () => {
             </div>
           )}
 
+          {/* NEW: Withdrawal Information for Selected Pool */}
+          {selectedPool && withdrawalState.canWithdraw && (
+            <div className="cyber-card border-laser-orange rounded-xl p-6 thin-neon-border">
+              <h3 className="text-xl font-cyber text-laser-orange mb-4">Collateral Withdrawal Available</h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {withdrawalState.withdrawableTokens.map(token => (
+                  <div key={token.address} className="p-3 bg-gray-900 rounded-lg">
+                    <div className="text-sm text-gray-400 mb-2">{token.info.symbol} Collateral:</div>
+                    <div className="text-neon-green font-cyber mb-1">
+                      Deposited: {formatAmount(token.currentCollateral, token.info.decimals)} {token.info.symbol}
+                    </div>
+                    <div className="text-laser-orange font-cyber">
+                      Max Withdrawable: {parseFloat(withdrawalState.maxWithdrawableAmounts[token.address.toLowerCase()]).toFixed(4)} {token.info.symbol}
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <div className="mt-4 p-3 bg-gray-900 rounded-lg">
+                <div className="text-laser-orange text-sm font-cyber mb-1">Withdrawal Safety Rule:</div>
+                <div className="text-gray-400 text-xs">
+                  You can only withdraw collateral that won't make your position undercollateralized. Remaining collateral must cover your borrowed amount.
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* No Position Message */}
           {selectedPool && !poolStats.hasPosition && (
             <div className="cyber-card border-gray-600 rounded-xl p-8 text-center">
@@ -916,13 +1226,14 @@ const LendingInterface = () => {
         </div>
       )}
 
-      {/* Action Tabs (Deposit, Borrow, Repay) */}
+      {/* Action Tabs (Deposit, Withdraw, Borrow, Repay) */}
       {activeTab !== 'dashboard' && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           {/* Action Panel */}
           <div className="cyber-card border-cyber-blue rounded-xl p-6 pencil-effect">
             <h2 className="text-2xl font-cyber text-neon-green mb-6 text-center animate-glow">
               {activeTab === 'deposit' && 'Deposit Collateral'}
+              {activeTab === 'withdraw' && 'Withdraw Collateral'}
               {activeTab === 'borrow' && 'Borrow Tokens'}
               {activeTab === 'repay' && 'Repay Tokens'}
             </h2>
@@ -948,6 +1259,57 @@ const LendingInterface = () => {
                 ))}
               </select>
             </div>
+
+            {/* ENHANCED: Withdraw Token Display */}
+            {selectedPool && activeTab === 'withdraw' && (
+              <div className="mb-4">
+                <label className="text-gray-300 font-cyber mb-2 block">Available for Withdrawal:</label>
+                
+                {withdrawalState.loading ? (
+                  <div className="p-3 border border-laser-orange rounded-lg bg-laser-orange bg-opacity-10">
+                    <div className="text-laser-orange font-cyber text-sm animate-pulse">
+                      Checking withdrawal availability...
+                    </div>
+                  </div>
+                ) : withdrawalState.canWithdraw ? (
+                  <div className="space-y-2">
+                    {withdrawalState.withdrawableTokens.map(token => (
+                      <div 
+                        key={token.address}
+                        className={`p-3 border rounded-lg cursor-pointer transition-all ${
+                          selectedTokenAddress === token.address
+                            ? 'border-laser-orange bg-laser-orange bg-opacity-20'
+                            : 'border-gray-600 hover:border-laser-orange bg-gray-900'
+                        }`}
+                        onClick={() => setSelectedTokenAddress(token.address)}
+                      >
+                        <div className="text-laser-orange font-cyber text-lg">
+                          {token.info.symbol}
+                        </div>
+                        <div className="text-gray-400 text-sm">
+                          Deposited: {formatAmount(token.currentCollateral, token.info.decimals)} {token.info.symbol}
+                        </div>
+                        <div className="text-gray-400 text-sm">
+                          Max Withdrawable: {parseFloat(withdrawalState.maxWithdrawableAmounts[token.address.toLowerCase()]).toFixed(6)} {token.info.symbol}
+                        </div>
+                        <div className="text-gray-500 text-xs mt-1">
+                          Token: {token.address.slice(0, 8)}...
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="p-3 border border-red-500 rounded-lg bg-red-900 bg-opacity-20">
+                    <div className="text-red-400 font-cyber text-sm">
+                      {withdrawalState.error || 'No collateral available for withdrawal'}
+                    </div>
+                    <div className="text-gray-400 text-xs mt-1">
+                      Deposit collateral first or repay loans to free up collateral
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* FIXED: Enhanced Borrow Token Display */}
             {selectedPool && activeTab === 'borrow' && (
@@ -998,7 +1360,7 @@ const LendingInterface = () => {
             )}
 
             {/* Token Selection for Deposit and Repay */}
-            {selectedPool && activeTab !== 'borrow' && (
+            {selectedPool && (activeTab === 'deposit' || activeTab === 'repay') && (
               <div className="mb-4">
                 <label className="text-gray-300 font-cyber mb-2 block">Select Token:</label>
                 <div className="grid grid-cols-2 gap-2">
@@ -1030,6 +1392,70 @@ const LendingInterface = () => {
                 placeholder="Enter amount"
                 className="w-full bg-black border border-gray-600 rounded-lg px-3 py-2 text-white font-cyber"
               />
+              
+              {/* ENHANCED: Withdraw Limits Display with Percentage Buttons */}
+              {activeTab === 'withdraw' && withdrawalState.canWithdraw && selectedTokenAddress && (
+                <div className="mt-2 space-y-2">
+                  <div className="flex justify-between items-center">
+                    <span className="text-gray-400 text-sm">
+                      Max: {parseFloat(withdrawalState.maxWithdrawableAmounts[selectedTokenAddress.toLowerCase()] || '0').toFixed(6)} {withdrawalState.withdrawableTokens.find(t => t.address.toLowerCase() === selectedTokenAddress.toLowerCase())?.info.symbol}
+                    </span>
+                    <div className="flex space-x-1">
+                      <button
+                        onClick={() => {
+                          const maxAmount = parseFloat(withdrawalState.maxWithdrawableAmounts[selectedTokenAddress.toLowerCase()] || '0');
+                          setAmount((maxAmount * 0.25).toFixed(6));
+                        }}
+                        className="px-2 py-1 bg-gray-700 text-white text-xs rounded hover:bg-gray-600"
+                      >
+                        25%
+                      </button>
+                      <button
+                        onClick={() => {
+                          const maxAmount = parseFloat(withdrawalState.maxWithdrawableAmounts[selectedTokenAddress.toLowerCase()] || '0');
+                          setAmount((maxAmount * 0.5).toFixed(6));
+                        }}
+                        className="px-2 py-1 bg-gray-700 text-white text-xs rounded hover:bg-gray-600"
+                      >
+                        50%
+                      </button>
+                      <button
+                        onClick={() => {
+                          const maxAmount = parseFloat(withdrawalState.maxWithdrawableAmounts[selectedTokenAddress.toLowerCase()] || '0');
+                          setAmount((maxAmount * 0.75).toFixed(6));
+                        }}
+                        className="px-2 py-1 bg-gray-700 text-white text-xs rounded hover:bg-gray-600"
+                      >
+                        75%
+                      </button>
+                      <button
+                        onClick={() => {
+                          const maxAmount = withdrawalState.maxWithdrawableAmounts[selectedTokenAddress.toLowerCase()] || '0';
+                          setAmount(maxAmount);
+                        }}
+                        className="px-2 py-1 bg-laser-orange text-black text-xs rounded hover:bg-opacity-80"
+                      >
+                        MAX
+                      </button>
+                    </div>
+                  </div>
+                  
+                  {/* Amount validation for withdraw */}
+                  {amount && withdrawalState.canWithdraw && selectedTokenAddress && (
+                    <div className="text-xs">
+                      {parseFloat(amount) > parseFloat(withdrawalState.maxWithdrawableAmounts[selectedTokenAddress.toLowerCase()] || '0') ? (
+                        <span className="text-red-400">
+                          ❌ Amount exceeds maximum withdrawable
+                        </span>
+                      ) : parseFloat(amount) > 0 ? (
+                        <span className="text-neon-green">
+                          ✅ Valid withdrawal amount
+                        </span>
+                      ) : null}
+                    </div>
+                  )}
+                </div>
+              )}
               
               {/* FIXED: Enhanced Borrow Limits Display */}
               {activeTab === 'borrow' && borrowingState.canBorrow && (
@@ -1084,6 +1510,25 @@ const LendingInterface = () => {
               )}
             </div>
 
+            {/* ENHANCED: Cross-token Information for Withdraw */}
+            {activeTab === 'withdraw' && selectedPool && withdrawalState.canWithdraw && (
+              <div className="mb-4 p-3 bg-gray-900 rounded-lg">
+                <div className="text-laser-orange text-sm font-cyber mb-2">
+                  🔒 Collateral Safety Rules
+                </div>
+                <div className="text-gray-400 text-xs space-y-1">
+                  <div>• Remaining collateral must cover your borrowed amount</div>
+                  <div>• Withdrawal cannot make your position undercollateralized</div>
+                  <div>• Collateral factor: {parseFloat(ethers.utils.formatEther(poolStats.collateralFactor)).toFixed(0)}%</div>
+                  {poolStats.totalBorrowedValue.gt(0) && (
+                    <div className="text-hot-pink">
+                      ⚠️ You have ${formatValue(poolStats.totalBorrowedValue)} borrowed - withdrawal limited
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
             {/* FIXED: Enhanced Cross-token Borrowing Information */}
             {activeTab === 'borrow' && selectedPool && (
               <div className="mb-4 p-3 bg-gray-900 rounded-lg">
@@ -1103,18 +1548,21 @@ const LendingInterface = () => {
               </div>
             )}
 
-            {/* FIXED: Enhanced Action Button */}
+            {/* ENHANCED: Action Button */}
             <button
               onClick={() => {
                 if (activeTab === 'deposit') depositCollateral();
+                else if (activeTab === 'withdraw') withdrawCollateral();
                 else if (activeTab === 'borrow') borrowTokens();
                 else if (activeTab === 'repay') repayTokens();
               }}
               disabled={loading || !account || !selectedPool || 
                        (activeTab === 'borrow' && (!borrowingState.canBorrow || !amount || parseFloat(amount) <= 0 || parseFloat(amount) > parseFloat(borrowingState.maxBorrowAmount))) ||
-                       (activeTab !== 'borrow' && (!amount || !isValidAddress(selectedTokenAddress)))}
+                       (activeTab === 'withdraw' && (!withdrawalState.canWithdraw || !amount || parseFloat(amount) <= 0 || !selectedTokenAddress || parseFloat(amount) > parseFloat(withdrawalState.maxWithdrawableAmounts[selectedTokenAddress.toLowerCase()] || '0'))) ||
+                       ((activeTab === 'deposit' || activeTab === 'repay') && (!amount || !isValidAddress(selectedTokenAddress)))}
               className={`w-full py-3 font-cyber text-lg rounded-lg transition-all neon-border disabled:opacity-50 disabled:cursor-not-allowed ${
                 activeTab === 'deposit' ? 'bg-neon-green border-neon-green text-black hover:bg-opacity-80' :
+                activeTab === 'withdraw' ? 'bg-laser-orange border-laser-orange text-black hover:bg-opacity-80' :
                 activeTab === 'borrow' ? 'bg-electric-purple border-electric-purple text-black hover:bg-opacity-80' :
                 'bg-hot-pink border-hot-pink text-black hover:bg-opacity-80'
               }`}
@@ -1129,6 +1577,15 @@ const LendingInterface = () => {
                 </span>
               ) : (
                 activeTab === 'deposit' ? 'Deposit Collateral' :
+                activeTab === 'withdraw' ? (
+                  !selectedPool ? 'Select Pool First' :
+                  !withdrawalState.canWithdraw ? 'No Collateral to Withdraw' :
+                  !selectedTokenAddress ? 'Select Token' :
+                  !amount ? 'Enter Amount' :
+                  parseFloat(amount) <= 0 ? 'Enter Valid Amount' :
+                  parseFloat(amount) > parseFloat(withdrawalState.maxWithdrawableAmounts[selectedTokenAddress.toLowerCase()] || '0') ? 'Amount Too High' :
+                  `Withdraw ${withdrawalState.withdrawableTokens.find(t => t.address.toLowerCase() === selectedTokenAddress.toLowerCase())?.info.symbol || 'Collateral'}`
+                ) :
                 activeTab === 'borrow' ? (
                   !selectedPool ? 'Select Pool First' :
                   !borrowingState.canBorrow ? 'Deposit Collateral First' :
@@ -1140,10 +1597,11 @@ const LendingInterface = () => {
               )}
             </button>
 
-            {/* FIXED: Enhanced Instructions */}
+            {/* ENHANCED: Instructions */}
             <div className="mt-6 p-4 bg-gray-900 rounded-lg">
               <h4 className="text-cyber-blue font-cyber text-sm mb-2">
                 {activeTab === 'deposit' && 'Deposit Instructions:'}
+                {activeTab === 'withdraw' && 'Withdraw Instructions:'}
                 {activeTab === 'borrow' && 'Borrowing Instructions:'}
                 {activeTab === 'repay' && 'Repayment Instructions:'}
               </h4>
@@ -1155,6 +1613,15 @@ const LendingInterface = () => {
                     <li>3. Enter the amount to deposit</li>
                     <li>4. Approve and deposit your collateral</li>
                     <li>5. You can then borrow the other token from the pool</li>
+                  </>
+                )}
+                {activeTab === 'withdraw' && (
+                  <>
+                    <li>1. Select a pool where you have collateral deposited</li>
+                    <li>2. Choose which collateral token to withdraw</li>
+                    <li>3. Use percentage buttons or enter custom amount</li>
+                    <li>4. System ensures withdrawal won't undercollateralize position</li>
+                    <li>5. Withdrawn tokens will be sent to your wallet</li>
                   </>
                 )}
                 {activeTab === 'borrow' && (
@@ -1172,14 +1639,14 @@ const LendingInterface = () => {
                     <li>2. Choose which borrowed token to repay</li>
                     <li>3. Enter amount to repay (max: your borrowed amount)</li>
                     <li>4. Approve and repay to reduce your debt</li>
-                    <li>5. Repaying improves your health factor</li>
+                    <li>5. Repaying improves your health factor and frees collateral</li>
                   </>
                 )}
               </ul>
             </div>
           </div>
 
-          {/* FIXED: Enhanced Pool Summary Panel */}
+          {/* ENHANCED: Pool Summary Panel */}
           <div className="cyber-card border-laser-orange rounded-xl p-6 pencil-effect">
             <h3 className="text-xl font-cyber text-laser-orange mb-4 animate-glow">
               {selectedPool ? `${selectedPool.tokenAInfo.symbol}/${selectedPool.tokenBInfo.symbol} Pool Summary` : 'Select Pool for Summary'}
@@ -1217,6 +1684,35 @@ const LendingInterface = () => {
                   <div className="text-gray-400 text-xs">Health Factor</div>
                 </div>
 
+                {/* ENHANCED: Withdrawal Status Display */}
+                {activeTab === 'withdraw' && (
+                  <div className="p-3 bg-gray-900 rounded-lg">
+                    <div className="text-laser-orange font-cyber text-sm mb-2">
+                      Withdrawal Status
+                    </div>
+                    {withdrawalState.loading ? (
+                      <div className="text-gray-400 text-xs animate-pulse">
+                        Checking availability...
+                      </div>
+                    ) : withdrawalState.canWithdraw ? (
+                      <div className="space-y-1">
+                        <div className="text-neon-green text-xs">
+                          ✅ Can withdraw from {withdrawalState.withdrawableTokens.length} token(s)
+                        </div>
+                        {withdrawalState.withdrawableTokens.map(token => (
+                          <div key={token.address} className="text-gray-400 text-xs">
+                            Max {token.info.symbol}: {parseFloat(withdrawalState.maxWithdrawableAmounts[token.address.toLowerCase()]).toFixed(4)}
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="text-red-400 text-xs">
+                        ❌ {withdrawalState.error || 'Cannot withdraw from this pool'}
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 {/* FIXED: Enhanced Borrowing Status Display */}
                 {activeTab === 'borrow' && (
                   <div className="p-3 bg-gray-900 rounded-lg">
@@ -1247,7 +1743,7 @@ const LendingInterface = () => {
                   </div>
                 )}
 
-                {/* Quick Actions */}
+                {/* Enhanced Quick Actions */}
                 <div className="space-y-2">
                   <button
                     onClick={() => setActiveTab('dashboard')}
@@ -1267,6 +1763,15 @@ const LendingInterface = () => {
                       className="w-full py-2 bg-electric-purple text-black font-cyber rounded-lg hover:bg-opacity-80 transition-all text-sm"
                     >
                       Borrow {borrowingState.availableTokenToBorrow?.info.symbol} (${formatValue(poolStats.totalAvailableToBorrow)} Available)
+                    </button>
+                  )}
+                  
+                  {withdrawalState.canWithdraw && (
+                    <button
+                      onClick={() => setActiveTab('withdraw')}
+                      className="w-full py-2 bg-laser-orange text-black font-cyber rounded-lg hover:bg-opacity-80 transition-all text-sm"
+                    >
+                      Withdraw Collateral ({withdrawalState.withdrawableTokens.length} Available)
                     </button>
                   )}
                   

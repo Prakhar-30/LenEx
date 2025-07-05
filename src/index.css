@@ -97,3 +97,105 @@
   border-radius: 8px;
   background: rgba(0, 0, 0, 0.6);
 }
+
+/* Add these styles to your existing index.css */
+
+@keyframes retro-border-glow {
+  0%, 100% {
+    box-shadow: 
+      0 0 5px rgba(0, 245, 255, 0.6),
+      inset 0 0 5px rgba(0, 245, 255, 0.2),
+      0 0 0 2px rgba(0, 245, 255, 0.8);
+  }
+  50% {
+    box-shadow: 
+      0 0 8px rgba(0, 245, 255, 0.8),
+      inset 0 0 8px rgba(0, 245, 255, 0.3),
+      0 0 0 2px rgba(0, 245, 255, 1);
+  }
+}
+
+/* 90s Gaming Machine Style Borders */
+.retro-gaming-border {
+  border: 3px solid;
+  border-image: linear-gradient(45deg, #00f5ff, #39ff14, #bf00ff, #ff1493) 1;
+  box-shadow: 
+    0 0 10px rgba(0, 245, 255, 0.5),
+    inset 0 0 10px rgba(0, 245, 255, 0.2),
+    0 0 0 3px rgba(0, 0, 0, 0.8);
+  animation: retro-border-glow 2s ease-in-out infinite alternate;
+  position: relative;
+}
+
+.retro-gaming-border::before {
+  content: '';
+  position: absolute;
+  top: -6px;
+  left: -6px;
+  right: -6px;
+  bottom: -6px;
+  background: linear-gradient(45deg, #00f5ff, #39ff14, #bf00ff, #ff1493, #ff4500);
+  border-radius: inherit;
+  z-index: -1;
+  opacity: 0.6;
+  filter: blur(8px);
+}
+
+.retro-gaming-border::after {
+  content: '';
+  position: absolute;
+  top: -3px;
+  left: -3px;
+  right: -3px;
+  bottom: -3px;
+  background: linear-gradient(45deg, transparent, rgba(255,255,255,0.1), transparent);
+  border-radius: inherit;
+  z-index: -1;
+}
+
+/* Specific Gaming Borders for Swap and Liquidity */
+.swap-gaming-border {
+  border: 2px solid;
+  border-image: linear-gradient(45deg, #39ff14, #00f5ff, #39ff14) 1;
+  box-shadow: 
+    0 0 8px rgba(57, 255, 20, 0.6),
+    inset 0 0 8px rgba(57, 255, 20, 0.2);
+  animation: retro-border-glow 2.5s ease-in-out infinite alternate;
+  position: relative;
+}
+
+.liquidity-gaming-border {
+  border: 2px solid;
+  border-image: linear-gradient(45deg, #bf00ff, #ff1493, #bf00ff) 1;
+  box-shadow: 
+    0 0 8px rgba(191, 0, 255, 0.6),
+    inset 0 0 8px rgba(191, 0, 255, 0.2);
+  animation: retro-border-glow 3s ease-in-out infinite alternate;
+  position: relative;
+}
+
+/* Retro Gaming Corner Details */
+.retro-corners {
+  position: relative;
+}
+
+.retro-corners::before,
+.retro-corners::after {
+  content: '';
+  position: absolute;
+  width: 20px;
+  height: 20px;
+  border: 2px solid;
+}
+
+.retro-corners::before {
+  top: -2px;
+  left: -2px;
+  border-color: #00f5ff transparent transparent #00f5ff;
+}
+
+.retro-corners::after {
+  bottom: -2px;
+  right: -2px;
+  border-color: transparent #ff1493 #ff1493 transparent;
+}

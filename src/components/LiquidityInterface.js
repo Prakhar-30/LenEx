@@ -485,7 +485,7 @@ const LiquidityInterface = () => {
       </div>
 
       {activeTab === 'add' ? (
-        <div className="cyber-card border-cyber-blue rounded-xl p-6 pencil-effect">
+        <div className="cyber-card border-cyber-blue rounded-xl p-6 pencil-effect swap-gaming-border retro-corners">
           <h2 className="text-2xl font-cyber text-neon-green mb-6 text-center animate-glow">
             Add Liquidity
           </h2>

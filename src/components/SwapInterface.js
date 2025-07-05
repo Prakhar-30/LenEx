@@ -390,7 +390,7 @@ const SwapInterface = () => {
 
   return (
     <div className="max-w-md mx-auto">
-      <div className="cyber-card border-cyber-blue rounded-xl p-6 pencil-effect">
+      <div className="cyber-card border-cyber-blue rounded-xl p-6 pencil-effect swap-gaming-border retro-corners">
         <h2 className="text-2xl font-cyber text-neon-green mb-6 text-center animate-glow">
           Token Swap
         </h2>

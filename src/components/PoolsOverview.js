@@ -284,37 +284,7 @@ const PoolsOverview = ({ onPoolSelect, selectedPoolId }) => {
         </div>
       )}
 
-      {/* Navigation CTA */}
-      {pools.length > 0 && (
-        <div className="cyber-card border-electric-purple rounded-xl p-6 text-center thin-neon-border">
-          <h3 className="text-xl font-cyber text-electric-purple mb-2">
-            Ready to start using DeFi?
-          </h3>
-          <p className="text-gray-400 mb-4">
-            Choose your DeFi strategy and navigate to the appropriate section
-          </p>
-          <div className="flex flex-wrap justify-center gap-3">
-            <a
-              href="/swap"
-              className="px-6 py-3 bg-neon-green text-black font-cyber rounded-lg hover:bg-opacity-80 transition-all"
-            >
-              🔄 Swap Tokens
-            </a>
-            <a
-              href="/liquidity"
-              className="px-6 py-3 bg-electric-purple text-black font-cyber rounded-lg hover:bg-opacity-80 transition-all"
-            >
-              💧 Add Liquidity
-            </a>
-            <a
-              href="/lending"
-              className="px-6 py-3 bg-hot-pink text-black font-cyber rounded-lg hover:bg-opacity-80 transition-all"
-            >
-              🏦 Lend & Borrow
-            </a>
-          </div>
-        </div>
-      )}
+      {/* REMOVED: Navigation CTA section has been completely removed */}
     </div>
   );
 };
