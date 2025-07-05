@@ -10,130 +10,41 @@ const LendingInterface = () => {
   const { account, signer } = useWallet();
   const { DeLexContract, contractsReady } = useContract(signer);
   const { fetchTokenInfo, approveToken, getTokenAllowance, getTokenBalance, isValidAddress } = useToken(signer);
+  
+  // Core state
   const [initialized, setInitialized] = useState(false);
   const [pools, setPools] = useState([]);
-  const [userPositions, setUserPositions] = useState([]);
   const [selectedPool, setSelectedPool] = useState(null);
-  const [amount, setAmount] = useState('');
-  const [selectedTokenAddress, setSelectedTokenAddress] = useState('');
+  const [selectedPoolPosition, setSelectedPoolPosition] = useState(null);
+  const [userPositions, setUserPositions] = useState([]);
   const [activeTab, setActiveTab] = useState('dashboard');
   const [loading, setLoading] = useState(false);
   const [dataLoading, setDataLoading] = useState(true);
-  const [dashboardStats, setDashboardStats] = useState({
+
+  // Form state
+  const [amount, setAmount] = useState('');
+  const [selectedTokenAddress, setSelectedTokenAddress] = useState('');
+
+  // Pool-specific lending summary state
+  const [poolStats, setPoolStats] = useState({
     totalCollateralValue: ethers.BigNumber.from(0),
     totalBorrowedValue: ethers.BigNumber.from(0),
     totalAvailableToBorrow: ethers.BigNumber.from(0),
-    overallHealthFactor: ethers.BigNumber.from(0),
-    totalPositions: 0,
-    collateralFactor: ethers.BigNumber.from(0)
+    healthFactor: ethers.BigNumber.from(0),
+    collateralFactor: ethers.BigNumber.from(0),
+    hasPosition: false
   });
-  const [availableTokenToBorrow, setAvailableTokenToBorrow] = useState(null);
-const [maxBorrowAmount, setMaxBorrowAmount] = useState('0');
-const [canBorrowFromPool, setCanBorrowFromPool] = useState(false);
 
-const checkAvailableTokensToBorrow = async () => {
-  if (!selectedPool || !account || !DeLexContract) {
-    setAvailableTokenToBorrow(null);
-    setCanBorrowFromPool(false);
-    setMaxBorrowAmount('0');
-    return;
-  }
-   try {
-    console.log('Checking available tokens to borrow for pool:', selectedPool.id);
-    
-    // Get user position to check collateral
-    const position = await DeLexContract.getUserPosition(account, selectedPool.id);
-    console.log('User position:', {
-      collateralA: position.collateralA.toString(),
-      collateralB: position.collateralB.toString(),
-      borrowedA: position.borrowedA.toString(),
-      borrowedB: position.borrowedB.toString()
-    });
+  // Borrowing state - FIXED for cross-token borrowing
+  const [borrowingState, setBorrowingState] = useState({
+    canBorrow: false,
+    availableTokenToBorrow: null,
+    maxBorrowAmount: '0',
+    collateralToken: null,
+    borrowableToken: null
+  });
 
-    const pool = await DeLexContract.getPoolInfo(selectedPool.id);
-    
-    let availableToken = null;
-    let canBorrow = false;
-    let maxAmount = '0';
-
-    // Check if user has collateral and determine what they can borrow
-    if (position.collateralA.gt(0) && position.collateralB.eq(0)) {
-      // Has tokenA as collateral, can borrow tokenB
-      availableToken = {
-        address: pool.tokenB,
-        info: await fetchTokenInfo(pool.tokenB)
-      };
-      canBorrow = true;
-      console.log('User has tokenA collateral, can borrow tokenB');
-    } else if (position.collateralB.gt(0) && position.collateralA.eq(0)) {
-      // Has tokenB as collateral, can borrow tokenA
-      availableToken = {
-        address: pool.tokenA,
-        info: await fetchTokenInfo(pool.tokenA)
-      };
-      canBorrow = true;
-      console.log('User has tokenB collateral, can borrow tokenA');
-    } else if (position.collateralA.eq(0) && position.collateralB.eq(0)) {
-      // No collateral deposited
-      console.log('No collateral deposited');
-      canBorrow = false;
-    } else {
-      // This shouldn't happen with new contract logic
-      console.log('Mixed collateral - this shouldn\'t happen');
-      canBorrow = false;
-    }
-
-    if (canBorrow && availableToken) {
-      // Calculate max borrow amount
-      const collateralValue = await DeLexContract.getCollateralValue(account, selectedPool.id);
-      const borrowValue = await DeLexContract.getBorrowValue(account, selectedPool.id);
-      const collateralFactor = await DeLexContract.COLLATERAL_FACTOR();
-      
-      const maxBorrowCapacity = collateralValue.mul(collateralFactor).div(ethers.constants.WeiPerEther);
-      
-      if (maxBorrowCapacity.gt(borrowValue)) {
-        const availableAmount = maxBorrowCapacity.sub(borrowValue);
-        maxAmount = ethers.utils.formatEther(availableAmount);
-        console.log('Max borrow amount:', maxAmount);
-      }
-
-      // Also check pool liquidity
-      const isTokenA = availableToken.address.toLowerCase() === pool.tokenA.toLowerCase();
-      const poolReserve = isTokenA ? pool.reserveA : pool.reserveB;
-      const poolLiquidity = ethers.utils.formatUnits(poolReserve, availableToken.info.decimals);
-      
-      // Take minimum of available borrow capacity and pool liquidity
-      if (parseFloat(poolLiquidity) < parseFloat(maxAmount)) {
-        maxAmount = poolLiquidity;
-        console.log('Limited by pool liquidity:', poolLiquidity);
-      }
-    }
-
-    setAvailableTokenToBorrow(availableToken);
-    setCanBorrowFromPool(canBorrow);
-    setMaxBorrowAmount(maxAmount);
-    
-    // Auto-select the available token
-    if (availableToken) {
-      setSelectedTokenAddress(availableToken.address);
-    }
-
-  } catch (error) {
-    console.error('Error checking available tokens to borrow:', error);
-    setAvailableTokenToBorrow(null);
-    setCanBorrowFromPool(false);
-    setMaxBorrowAmount('0');
-  }
-};
-
-useEffect(() => {
-  if (initialized && selectedPool && account) {
-    checkAvailableTokensToBorrow();
-  }
-}, [selectedPool, account, initialized]);
-
-
-  // Withdrawal modal state
+  // Modal states
   const [withdrawalModal, setWithdrawalModal] = useState({
     isOpen: false,
     position: null,
@@ -143,7 +54,6 @@ useEffect(() => {
     withdrawAmount: ''
   });
 
-  // Repayment modal state
   const [repaymentModal, setRepaymentModal] = useState({
     isOpen: false,
     position: null,
@@ -154,24 +64,37 @@ useEffect(() => {
     repayAmount: ''
   });
 
-useEffect(() => {
-  if (contractsReady && signer && !initialized) {
-    console.log('Initializing lending interface...');
-    setInitialized(true);
-    // Only load data if we have an account
-    if (account) {
+  // FIXED: Initialize component when contracts are ready
+  useEffect(() => {
+    if (contractsReady && signer && !initialized) {
+      console.log('Initializing lending interface...');
+      setInitialized(true);
+      if (account) {
+        loadData();
+      }
+    }
+  }, [contractsReady, signer, account, initialized]);
+
+  // FIXED: Handle account changes after initialization
+  useEffect(() => {
+    if (initialized && account && DeLexContract) {
+      console.log('Account connected after initialization, loading data...');
       loadData();
     }
-  }
-}, [contractsReady, signer, account, initialized]);
+  }, [initialized, account, DeLexContract]);
 
-useEffect(() => {
-  if (initialized && account && DeLexContract) {
-    console.log('Account connected after initialization, loading data...');
-    loadData();
-  }
-}, [initialized, account, DeLexContract]);
+  // FIXED: Update pool-specific stats when selected pool changes
+  useEffect(() => {
+    if (initialized && selectedPool && account) {
+      loadPoolSpecificStats();
+      checkBorrowingAvailability();
+    } else {
+      resetPoolStats();
+      resetBorrowingState();
+    }
+  }, [selectedPool, account, initialized]);
 
+  // Load all data
   const loadData = async () => {
     if (!DeLexContract || !account) return;
     
@@ -186,6 +109,7 @@ useEffect(() => {
     }
   };
 
+  // Load available pools
   const loadPools = async () => {
     try {
       const poolIds = await DeLexContract.getAllPools();
@@ -193,18 +117,11 @@ useEffect(() => {
         poolIds.map(async (poolId) => {
           try {
             const pool = await DeLexContract.getPoolInfo(poolId);
-            
             const [tokenAInfo, tokenBInfo] = await Promise.all([
               fetchTokenInfo(pool.tokenA),
               fetchTokenInfo(pool.tokenB)
             ]);
-            
-            return { 
-              id: poolId, 
-              tokenAInfo,
-              tokenBInfo,
-              ...pool 
-            };
+            return { id: poolId, tokenAInfo, tokenBInfo, ...pool };
           } catch (poolError) {
             console.error(`Error loading pool ${poolId}:`, poolError);
             return null;
@@ -215,6 +132,7 @@ useEffect(() => {
       const validPools = poolsData.filter(pool => pool !== null);
       setPools(validPools);
       
+      // Auto-select first pool if none selected
       if (validPools.length > 0 && !selectedPool) {
         setSelectedPool(validPools[0]);
       }
@@ -223,305 +141,303 @@ useEffect(() => {
     }
   };
 
-  // FIXED: Improved user positions loading with better calculations
-const loadUserPositions = async () => {
-  try {
-    const poolIds = await DeLexContract.getAllPools();
-    const positions = [];
-    const collateralFactor = await DeLexContract.COLLATERAL_FACTOR();
-    
-    let totalCollateralValue = ethers.BigNumber.from(0);
-    let totalBorrowedValue = ethers.BigNumber.from(0);
-    let lowestHealthFactor = ethers.constants.MaxUint256;
-    let hasAnyBorrowedAmount = false;
-    
-    console.log('Loading user positions for pools:', poolIds.length);
-    
-    for (const poolId of poolIds) {
-      try {
-        const position = await DeLexContract.getUserPosition(account, poolId);
-        const pool = await DeLexContract.getPoolInfo(poolId);
-        
-        console.log('Position for pool', poolId, ':', {
-          collateralA: position.collateralA.toString(),
-          collateralB: position.collateralB.toString(),
-          borrowedA: position.borrowedA.toString(),
-          borrowedB: position.borrowedB.toString()
-        });
-        
-        // Check if user has any position in this pool
-        if (position.collateralA.gt(0) || position.collateralB.gt(0) || 
-            position.borrowedA.gt(0) || position.borrowedB.gt(0)) {
+  // FIXED: Load user positions with better error handling
+  const loadUserPositions = async () => {
+    try {
+      const poolIds = await DeLexContract.getAllPools();
+      const positions = [];
+      
+      for (const poolId of poolIds) {
+        try {
+          const position = await DeLexContract.getUserPosition(account, poolId);
+          const pool = await DeLexContract.getPoolInfo(poolId);
           
-          const [tokenAInfo, tokenBInfo] = await Promise.all([
-            fetchTokenInfo(pool.tokenA),
-            fetchTokenInfo(pool.tokenB)
-          ]);
-          
-          const positionData = {
-            poolId,
-            pool,
-            tokenAInfo,
-            tokenBInfo,
-            ...position
-          };
-          
-          positions.push(positionData);
-          
-          // FIXED: Use actual token decimals for calculation
-          const collateralA = parseFloat(ethers.utils.formatUnits(position.collateralA, tokenAInfo.decimals));
-          const collateralB = parseFloat(ethers.utils.formatUnits(position.collateralB, tokenBInfo.decimals));
-          const positionCollateralValue = collateralA + collateralB;
-          
-          // FIXED: Use actual token decimals for borrowed amounts
-          const borrowedA = parseFloat(ethers.utils.formatUnits(position.borrowedA, tokenAInfo.decimals));
-          const borrowedB = parseFloat(ethers.utils.formatUnits(position.borrowedB, tokenBInfo.decimals));
-          const positionBorrowedValue = borrowedA + borrowedB;
-          
-          console.log('Calculated values for position:', {
-            collateralA,
-            collateralB,
-            borrowedA,
-            borrowedB,
-            positionCollateralValue,
-            positionBorrowedValue
-          });
-          
-          // Convert back to BigNumber for aggregation using 18 decimals for USD value
-          const collateralValueWei = ethers.utils.parseEther(positionCollateralValue.toString());
-          const borrowedValueWei = ethers.utils.parseEther(positionBorrowedValue.toString());
-          
-          totalCollateralValue = totalCollateralValue.add(collateralValueWei);
-          totalBorrowedValue = totalBorrowedValue.add(borrowedValueWei);
-          
-          // FIXED: Check if there's any borrowed amount
-          if (positionBorrowedValue > 0) {
-            hasAnyBorrowedAmount = true;
-            const collateralFactorDecimal = parseFloat(ethers.utils.formatEther(collateralFactor));
-            const maxBorrowCapacity = positionCollateralValue * collateralFactorDecimal;
+          // Check if user has any position in this pool
+          if (position.collateralA.gt(0) || position.collateralB.gt(0) || 
+              position.borrowedA.gt(0) || position.borrowedB.gt(0)) {
             
-            if (maxBorrowCapacity > 0) {
-              const healthFactor = maxBorrowCapacity / positionBorrowedValue;
-              
-              console.log(`Position health factor calculation:`, {
-                collateralValue: positionCollateralValue,
-                borrowedValue: positionBorrowedValue,
-                collateralFactor: collateralFactorDecimal,
-                maxBorrowCapacity,
-                healthFactor
-              });
-              
-              if (healthFactor < parseFloat(ethers.utils.formatEther(lowestHealthFactor))) {
-                lowestHealthFactor = ethers.utils.parseEther(Math.max(0, healthFactor).toString());
-              }
-            }
+            const [tokenAInfo, tokenBInfo] = await Promise.all([
+              fetchTokenInfo(pool.tokenA),
+              fetchTokenInfo(pool.tokenB)
+            ]);
+            
+            positions.push({
+              poolId,
+              pool,
+              tokenAInfo,
+              tokenBInfo,
+              ...position
+            });
+          }
+        } catch (positionError) {
+          console.error(`Error loading position for pool ${poolId}:`, positionError);
+        }
+      }
+      
+      setUserPositions(positions);
+    } catch (error) {
+      console.error('Error loading user positions:', error);
+    }
+  };
+
+  // FIXED: Load pool-specific stats instead of global stats
+  const loadPoolSpecificStats = async () => {
+    if (!selectedPool || !account || !DeLexContract) {
+      resetPoolStats();
+      return;
+    }
+
+    try {
+      console.log('Loading pool-specific stats for pool:', selectedPool.id);
+      
+      // Get user position for selected pool
+      const position = await DeLexContract.getUserPosition(account, selectedPool.id);
+      const collateralFactor = await DeLexContract.COLLATERAL_FACTOR();
+      
+      // Check if user has any position in this pool
+      const hasPosition = position.collateralA.gt(0) || position.collateralB.gt(0) || 
+                         position.borrowedA.gt(0) || position.borrowedB.gt(0);
+      
+      let totalCollateralValue = ethers.BigNumber.from(0);
+      let totalBorrowedValue = ethers.BigNumber.from(0);
+      let healthFactor = ethers.BigNumber.from(0);
+      
+      if (hasPosition) {
+        // Calculate values using actual token decimals
+        const collateralA = parseFloat(ethers.utils.formatUnits(position.collateralA, selectedPool.tokenAInfo.decimals));
+        const collateralB = parseFloat(ethers.utils.formatUnits(position.collateralB, selectedPool.tokenBInfo.decimals));
+        const borrowedA = parseFloat(ethers.utils.formatUnits(position.borrowedA, selectedPool.tokenAInfo.decimals));
+        const borrowedB = parseFloat(ethers.utils.formatUnits(position.borrowedB, selectedPool.tokenBInfo.decimals));
+        
+        const collateralValue = collateralA + collateralB;
+        const borrowedValue = borrowedA + borrowedB;
+        
+        // Convert to BigNumber for consistent handling
+        totalCollateralValue = ethers.utils.parseEther(collateralValue.toString());
+        totalBorrowedValue = ethers.utils.parseEther(borrowedValue.toString());
+        
+        // Calculate health factor
+        if (borrowedValue > 0) {
+          const collateralFactorDecimal = parseFloat(ethers.utils.formatEther(collateralFactor));
+          const maxBorrowCapacity = collateralValue * collateralFactorDecimal;
+          const hf = maxBorrowCapacity / borrowedValue;
+          healthFactor = ethers.utils.parseEther(Math.max(0, hf).toString());
+        } else {
+          healthFactor = ethers.constants.MaxUint256; // Infinite when no debt
+        }
+      }
+      
+      // Calculate available to borrow for this pool
+      const maxBorrowCapacity = totalCollateralValue.mul(collateralFactor).div(ethers.constants.WeiPerEther);
+      const totalAvailableToBorrow = maxBorrowCapacity.gt(totalBorrowedValue) ? 
+        maxBorrowCapacity.sub(totalBorrowedValue) : ethers.BigNumber.from(0);
+      
+      setPoolStats({
+        totalCollateralValue,
+        totalBorrowedValue,
+        totalAvailableToBorrow,
+        healthFactor,
+        collateralFactor,
+        hasPosition
+      });
+      
+      setSelectedPoolPosition(hasPosition ? position : null);
+      
+      console.log('Pool-specific stats updated:', {
+        collateralValue: ethers.utils.formatEther(totalCollateralValue),
+        borrowedValue: ethers.utils.formatEther(totalBorrowedValue),
+        availableToBorrow: ethers.utils.formatEther(totalAvailableToBorrow),
+        hasPosition
+      });
+      
+    } catch (error) {
+      console.error('Error loading pool-specific stats:', error);
+      resetPoolStats();
+    }
+  };
+
+  // FIXED: Check borrowing availability based on contract rules
+// FIXED: Check borrowing availability with better pool liquidity handling
+const checkBorrowingAvailability = async () => {
+  if (!selectedPool || !account || !DeLexContract) {
+    resetBorrowingState();
+    return;
+  }
+
+  try {
+    console.log('Checking borrowing availability for pool:', selectedPool.id);
+    
+    const position = await DeLexContract.getUserPosition(account, selectedPool.id);
+    const pool = await DeLexContract.getPoolInfo(selectedPool.id);
+    
+    let canBorrow = false;
+    let availableTokenToBorrow = null;
+    let maxBorrowAmount = '0';
+    let collateralToken = null;
+    let borrowableToken = null;
+
+    // Check collateral and determine what can be borrowed
+    if (position.collateralA.gt(0) && position.collateralB.eq(0)) {
+      // Has tokenA as collateral, can borrow tokenB
+      canBorrow = true;
+      collateralToken = {
+        address: selectedPool.tokenA,
+        info: selectedPool.tokenAInfo,
+        amount: position.collateralA
+      };
+      borrowableToken = {
+        address: selectedPool.tokenB,
+        info: selectedPool.tokenBInfo
+      };
+      availableTokenToBorrow = borrowableToken;
+      
+      console.log('User has tokenA collateral, can borrow tokenB');
+    } else if (position.collateralB.gt(0) && position.collateralA.eq(0)) {
+      // Has tokenB as collateral, can borrow tokenA
+      canBorrow = true;
+      collateralToken = {
+        address: selectedPool.tokenB,
+        info: selectedPool.tokenBInfo,
+        amount: position.collateralB
+      };
+      borrowableToken = {
+        address: selectedPool.tokenA,
+        info: selectedPool.tokenAInfo
+      };
+      availableTokenToBorrow = borrowableToken;
+      
+      console.log('User has tokenB collateral, can borrow tokenA');
+    } else {
+      console.log('No valid collateral configuration for borrowing');
+      canBorrow = false;
+    }
+
+    // Calculate max borrow amount if can borrow
+    if (canBorrow && availableTokenToBorrow) {
+      try {
+        // FIXED: Use contract's built-in function for available tokens to borrow
+        const contractResult = await DeLexContract.getAvailableTokensToBorrow(account, selectedPool.id);
+        
+        if (contractResult.canBorrow && contractResult.maxBorrowAmount.gt(0)) {
+          // Use the contract's calculation directly
+          maxBorrowAmount = ethers.utils.formatUnits(
+            contractResult.maxBorrowAmount, 
+            availableTokenToBorrow.info.decimals
+          );
+          console.log('Contract says max borrow amount:', maxBorrowAmount);
+        } else {
+          // Fallback to manual calculation
+          const collateralValue = await DeLexContract.getCollateralValue(account, selectedPool.id);
+          const borrowValue = await DeLexContract.getBorrowValue(account, selectedPool.id);
+          const collateralFactor = await DeLexContract.COLLATERAL_FACTOR();
+          
+          const maxBorrowCapacity = collateralValue.mul(collateralFactor).div(ethers.constants.WeiPerEther);
+          
+          if (maxBorrowCapacity.gt(borrowValue)) {
+            const availableAmount = maxBorrowCapacity.sub(borrowValue);
+            // FIXED: Use proper token decimals for formatting
+            maxBorrowAmount = ethers.utils.formatUnits(availableAmount, availableTokenToBorrow.info.decimals);
+            console.log('Manual calculation max borrow amount:', maxBorrowAmount);
           }
         }
-      } catch (positionError) {
-        console.error(`Error loading position for pool ${poolId}:`, positionError);
+
+        // FIXED: Check pool liquidity with proper decimals
+        const isTokenA = availableTokenToBorrow.address.toLowerCase() === selectedPool.tokenA.toLowerCase();
+        const poolReserve = isTokenA ? selectedPool.reserveA : selectedPool.reserveB;
+        
+        // Format pool liquidity using correct decimals
+        const poolLiquidity = ethers.utils.formatUnits(poolReserve, availableTokenToBorrow.info.decimals);
+        
+        console.log('Pool reserve check:', {
+          poolReserve: poolReserve.toString(),
+          poolLiquidity,
+          tokenDecimals: availableTokenToBorrow.info.decimals,
+          maxBorrowAmount
+        });
+        
+        // Take minimum of available borrow capacity and pool liquidity
+        if (parseFloat(poolLiquidity) < parseFloat(maxBorrowAmount)) {
+          console.log('Max borrow amount limited by pool liquidity');
+          maxBorrowAmount = poolLiquidity;
+        }
+        
+        // FIXED: Ensure we don't show 0 when there should be available amount
+        if (parseFloat(maxBorrowAmount) <= 0 && poolStats.totalAvailableToBorrow.gt(0)) {
+          // If pool stats show available amount but calculation shows 0, use a minimum
+          const minBorrowable = Math.min(
+            parseFloat(ethers.utils.formatEther(poolStats.totalAvailableToBorrow)),
+            parseFloat(poolLiquidity)
+          );
+          if (minBorrowable > 0) {
+            maxBorrowAmount = minBorrowable.toFixed(6);
+            console.log('Used fallback minimum borrowable amount:', maxBorrowAmount);
+          }
+        }
+
+      } catch (calcError) {
+        console.error('Error calculating max borrow amount:', calcError);
+        maxBorrowAmount = '0';
       }
     }
-    
-    // Calculate available to borrow
-    const maxBorrowCapacity = totalCollateralValue.mul(collateralFactor).div(ethers.constants.WeiPerEther);
-    const totalAvailableToBorrow = maxBorrowCapacity.gt(totalBorrowedValue) ? 
-      maxBorrowCapacity.sub(totalBorrowedValue) : ethers.BigNumber.from(0);
-    
-    console.log('Final dashboard stats calculation:', {
-      totalCollateralValue: ethers.utils.formatEther(totalCollateralValue),
-      totalBorrowedValue: ethers.utils.formatEther(totalBorrowedValue),
-      totalAvailableToBorrow: ethers.utils.formatEther(totalAvailableToBorrow),
-      hasAnyBorrowedAmount,
-      positionsCount: positions.length,
-      lowestHealthFactor: hasAnyBorrowedAmount ? ethers.utils.formatEther(lowestHealthFactor) : 'N/A'
+
+    setBorrowingState({
+      canBorrow,
+      availableTokenToBorrow,
+      maxBorrowAmount,
+      collateralToken,
+      borrowableToken
     });
-    
-    setUserPositions(positions);
-    setDashboardStats({
-      totalCollateralValue,
-      totalBorrowedValue,
-      totalAvailableToBorrow,
-      overallHealthFactor: hasAnyBorrowedAmount ? lowestHealthFactor : ethers.BigNumber.from(0),
-      totalPositions: positions.length,
-      collateralFactor
+
+    // Auto-select the available token for borrowing
+    if (availableTokenToBorrow && activeTab === 'borrow') {
+      setSelectedTokenAddress(availableTokenToBorrow.address);
+    }
+
+    console.log('Borrowing state updated:', {
+      canBorrow,
+      maxBorrowAmount,
+      availableToken: availableTokenToBorrow?.info?.symbol,
+      collateralToken: collateralToken?.info?.symbol,
+      poolLiquidity: availableTokenToBorrow ? ethers.utils.formatUnits(
+        availableTokenToBorrow.address.toLowerCase() === selectedPool.tokenA.toLowerCase() ? 
+        selectedPool.reserveA : selectedPool.reserveB,
+        availableTokenToBorrow.info.decimals
+      ) : '0'
     });
+
   } catch (error) {
-    console.error('Error loading user positions:', error);
+    console.error('Error checking borrowing availability:', error);
+    resetBorrowingState();
   }
 };
 
-  // Calculate maximum withdrawable amount without becoming undercollateralized
-  const calculateMaxWithdrawable = async (poolId, tokenAddress, tokenInfo, currentCollateral) => {
-    try {
-      // Get current position data
-      const position = await DeLexContract.getUserPosition(account, poolId);
-      const pool = await DeLexContract.getPoolInfo(poolId);
-      const collateralFactor = await DeLexContract.COLLATERAL_FACTOR();
-      
-      // Manual calculation using simplified 1:1 token values
-      const [tokenAInfo, tokenBInfo] = await Promise.all([
-        fetchTokenInfo(pool.tokenA),
-        fetchTokenInfo(pool.tokenB)
-      ]);
-      
-      const collateralA = parseFloat(ethers.utils.formatUnits(position.collateralA, tokenAInfo.decimals));
-      const collateralB = parseFloat(ethers.utils.formatUnits(position.collateralB, tokenBInfo.decimals));
-      const borrowedA = parseFloat(ethers.utils.formatUnits(position.borrowedA, tokenAInfo.decimals));
-      const borrowedB = parseFloat(ethers.utils.formatUnits(position.borrowedB, tokenBInfo.decimals));
-      
-      const totalCollateralValue = collateralA + collateralB;
-      const totalBorrowedValue = borrowedA + borrowedB;
-      
-      // If no borrowed amount, can withdraw all
-      if (totalBorrowedValue === 0) {
-        return ethers.utils.formatUnits(currentCollateral, tokenInfo.decimals);
-      }
-      
-      // Calculate minimum collateral needed
-      const collateralFactorDecimal = parseFloat(ethers.utils.formatEther(collateralFactor));
-      const minCollateralValue = totalBorrowedValue / collateralFactorDecimal;
-      
-      // Add 10% safety buffer
-      const safeMinCollateralValue = minCollateralValue * 1.1;
-      
-      if (totalCollateralValue <= safeMinCollateralValue) {
-        return '0';
-      }
-      
-      // Maximum value that can be withdrawn
-      const maxWithdrawableValue = totalCollateralValue - safeMinCollateralValue;
-      
-      // Don't allow withdrawal of more than current collateral
-      const currentCollateralFormatted = parseFloat(ethers.utils.formatUnits(currentCollateral, tokenInfo.decimals));
-      const actualMaxWithdrawable = Math.min(maxWithdrawableValue, currentCollateralFormatted);
-      
-      return Math.max(0, actualMaxWithdrawable).toFixed(6);
-    } catch (error) {
-      console.error('Error calculating max withdrawable:', error);
-      return '0';
-    }
+  // Reset functions
+  const resetPoolStats = () => {
+    setPoolStats({
+      totalCollateralValue: ethers.BigNumber.from(0),
+      totalBorrowedValue: ethers.BigNumber.from(0),
+      totalAvailableToBorrow: ethers.BigNumber.from(0),
+      healthFactor: ethers.BigNumber.from(0),
+      collateralFactor: ethers.BigNumber.from(0),
+      hasPosition: false
+    });
+    setSelectedPoolPosition(null);
   };
 
-  // Calculate max repayable amount
-  const calculateMaxRepayable = async (poolId, tokenAddress, tokenInfo) => {
-    try {
-      const position = await DeLexContract.getUserPosition(account, poolId);
-      const pool = await DeLexContract.getPoolInfo(poolId);
-      
-      let borrowedAmount;
-      if (tokenAddress.toLowerCase() === pool.tokenA.toLowerCase()) {
-        borrowedAmount = position.borrowedA;
-      } else if (tokenAddress.toLowerCase() === pool.tokenB.toLowerCase()) {
-        borrowedAmount = position.borrowedB;
-      } else {
-        return { maxRepayable: '0', borrowed: '0' };
-      }
-      
-      if (borrowedAmount.eq(0)) {
-        return { maxRepayable: '0', borrowed: '0' };
-      }
-      
-      const userBalance = await getTokenBalance(tokenAddress, account);
-      const userBalanceWei = ethers.utils.parseUnits(userBalance, tokenInfo.decimals);
-      
-      const maxRepayableWei = borrowedAmount.gt(userBalanceWei) ? userBalanceWei : borrowedAmount;
-      
-      return {
-        maxRepayable: ethers.utils.formatUnits(maxRepayableWei, tokenInfo.decimals),
-        borrowed: ethers.utils.formatUnits(borrowedAmount, tokenInfo.decimals)
-      };
-    } catch (error) {
-      console.error('Error calculating max repayable:', error);
-      return { maxRepayable: '0', borrowed: '0' };
-    }
-  };
-
-  const openWithdrawalModal = async (position, tokenAddress, tokenInfo, currentCollateral) => {
-    try {
-      const maxWithdrawable = await calculateMaxWithdrawable(
-        position.poolId, 
-        tokenAddress, 
-        tokenInfo, 
-        currentCollateral
-      );
-      
-      setWithdrawalModal({
-        isOpen: true,
-        position,
-        tokenAddress,
-        tokenInfo,
-        maxWithdrawable,
-        withdrawAmount: ''
-      });
-    } catch (error) {
-      console.error('Error opening withdrawal modal:', error);
-      toast.error('Failed to calculate withdrawal limits');
-    }
-  };
-
-  const closeWithdrawalModal = () => {
-    setWithdrawalModal({
-      isOpen: false,
-      position: null,
-      tokenAddress: '',
-      tokenInfo: null,
-      maxWithdrawable: '0',
-      withdrawAmount: ''
+  const resetBorrowingState = () => {
+    setBorrowingState({
+      canBorrow: false,
+      availableTokenToBorrow: null,
+      maxBorrowAmount: '0',
+      collateralToken: null,
+      borrowableToken: null
     });
   };
 
-  const openRepaymentModal = async (position, tokenAddress, tokenInfo) => {
-    try {
-      const { maxRepayable, borrowed } = await calculateMaxRepayable(
-        position.poolId, 
-        tokenAddress, 
-        tokenInfo
-      );
-      
-      setRepaymentModal({
-        isOpen: true,
-        position,
-        tokenAddress,
-        tokenInfo,
-        maxRepayable,
-        currentBorrowed: borrowed,
-        repayAmount: ''
-      });
-    } catch (error) {
-      console.error('Error opening repayment modal:', error);
-      toast.error('Failed to calculate repayment limits');
-    }
-  };
+  // Continue with other component code...
+  // This is Part 1 - State and Initialization
 
-  const closeRepaymentModal = () => {
-    setRepaymentModal({
-      isOpen: false,
-      position: null,
-      tokenAddress: '',
-      tokenInfo: null,
-      maxRepayable: '0',
-      currentBorrowed: '0',
-      repayAmount: ''
-    });
-  };
-
-  const refreshRepaymentModal = async () => {
-    if (repaymentModal.isOpen) {
-      const { maxRepayable, borrowed } = await calculateMaxRepayable(
-        repaymentModal.position.poolId, 
-        repaymentModal.tokenAddress, 
-        repaymentModal.tokenInfo
-      );
-      
-      setRepaymentModal(prev => ({
-        ...prev,
-        maxRepayable,
-        currentBorrowed: borrowed,
-        repayAmount: ''
-      }));
-    }
-  };
-
+  // FIXED: Deposit collateral with proper validation
   const depositCollateral = async () => {
     if (!account || !DeLexContract || !selectedPool || !amount || !isValidAddress(selectedTokenAddress)) {
       toast.error('Please fill all required fields');
@@ -534,6 +450,16 @@ const loadUserPositions = async () => {
       const tokenInfo = await fetchTokenInfo(selectedTokenAddress);
       const amountWei = ethers.utils.parseUnits(amount, tokenInfo.decimals);
       
+      // Check if this token is part of the selected pool
+      const isValidToken = selectedTokenAddress.toLowerCase() === selectedPool.tokenA.toLowerCase() || 
+                          selectedTokenAddress.toLowerCase() === selectedPool.tokenB.toLowerCase();
+      
+      if (!isValidToken) {
+        toast.error('Token must be part of the selected pool');
+        return;
+      }
+      
+      // Check allowance and approve if needed
       const currentAllowance = await getTokenAllowance(selectedTokenAddress, account, DeLexContract.address);
       const currentAllowanceWei = ethers.utils.parseUnits(currentAllowance, tokenInfo.decimals);
       
@@ -551,81 +477,96 @@ const loadUserPositions = async () => {
       toast.success(`Collateral deposited: ${amount} ${tokenInfo.symbol}`);
       
       setAmount('');
-      loadData();
+      await loadData();
+      await loadPoolSpecificStats();
+      await checkBorrowingAvailability();
     } catch (error) {
       toast.dismiss();
-      toast.error('Failed to deposit collateral: ' + error.message);
+      
+      let errorMessage = 'Failed to deposit collateral';
+      
+      if (error.message.includes('Cannot deposit tokenA as collateral if you have tokenB position')) {
+        errorMessage = 'Cannot deposit this token as collateral - you already have a position with the other token in this pool';
+      } else if (error.message.includes('Cannot deposit tokenB as collateral if you have tokenA position')) {
+        errorMessage = 'Cannot deposit this token as collateral - you already have a position with the other token in this pool';
+      }
+      
+      toast.error(errorMessage);
       console.error('Deposit error:', error);
     } finally {
       setLoading(false);
     }
   };
 
-const borrowTokens = async () => {
-  if (!account || !DeLexContract || !selectedPool || !amount || !isValidAddress(selectedTokenAddress)) {
-    toast.error('Please fill all required fields');
-    return;
-  }
+  // FIXED: Borrow tokens with proper cross-token validation
+  const borrowTokens = async () => {
+    if (!account || !DeLexContract || !selectedPool || !amount || !isValidAddress(selectedTokenAddress)) {
+      toast.error('Please fill all required fields');
+      return;
+    }
 
-  if (!canBorrowFromPool) {
-    toast.error('You need to deposit collateral first to borrow from this pool');
-    return;
-  }
+    if (!borrowingState.canBorrow) {
+      toast.error('You need to deposit collateral first to borrow from this pool');
+      return;
+    }
 
-  if (!availableTokenToBorrow || selectedTokenAddress.toLowerCase() !== availableTokenToBorrow.address.toLowerCase()) {
-    toast.error(`You can only borrow ${availableTokenToBorrow?.info?.symbol || 'the other token'} from this pool based on your collateral`);
-    return;
-  }
-  
-  try {
-    setLoading(true);
-    
-    const tokenInfo = await fetchTokenInfo(selectedTokenAddress);
-    const amountWei = ethers.utils.parseUnits(amount, tokenInfo.decimals);
-    
-    // Check if amount exceeds max borrowable
-    if (parseFloat(amount) > parseFloat(maxBorrowAmount)) {
-      toast.error(`Maximum borrowable amount is ${parseFloat(maxBorrowAmount).toFixed(4)} ${tokenInfo.symbol}`);
+    if (!borrowingState.availableTokenToBorrow || 
+        selectedTokenAddress.toLowerCase() !== borrowingState.availableTokenToBorrow.address.toLowerCase()) {
+      toast.error(`You can only borrow ${borrowingState.availableTokenToBorrow?.info?.symbol || 'the available token'} from this pool based on your collateral`);
       return;
     }
     
-    toast.loading(`Borrowing ${tokenInfo.symbol}...`);
-    const tx = await DeLexContract.borrow(selectedPool.id, selectedTokenAddress, amountWei);
-    await tx.wait();
-    
-    toast.dismiss();
-    toast.success(`Borrowed: ${amount} ${tokenInfo.symbol}`);
-    
-    setAmount('');
-    loadData();
-    checkAvailableTokensToBorrow(); // Refresh available amounts
-    
-  } catch (error) {
-    toast.dismiss();
-    let errorMessage = 'Failed to borrow tokens';
-    
-    if (error.message.includes('Must deposit tokenB as collateral to borrow tokenA')) {
-      errorMessage = 'You need to deposit the other token as collateral first';
-    } else if (error.message.includes('Must deposit tokenA as collateral to borrow tokenB')) {
-      errorMessage = 'You need to deposit the other token as collateral first';
-    } else if (error.message.includes('Cannot borrow tokenA if you have tokenA as collateral')) {
-      errorMessage = 'Cannot borrow the same token you deposited as collateral';
-    } else if (error.message.includes('Cannot borrow tokenB if you have tokenB as collateral')) {
-      errorMessage = 'Cannot borrow the same token you deposited as collateral';
-    } else if (error.message.includes('Insufficient collateral')) {
-      errorMessage = 'Insufficient collateral - deposit more collateral or borrow less';
-    } else if (error.message.includes('Insufficient liquidity')) {
-      errorMessage = 'Insufficient liquidity in the pool for this borrow amount';
+    try {
+      setLoading(true);
+      
+      const tokenInfo = await fetchTokenInfo(selectedTokenAddress);
+      const amountWei = ethers.utils.parseUnits(amount, tokenInfo.decimals);
+      
+      // Check if amount exceeds max borrowable
+      if (parseFloat(amount) > parseFloat(borrowingState.maxBorrowAmount)) {
+        toast.error(`Maximum borrowable amount is ${parseFloat(borrowingState.maxBorrowAmount).toFixed(4)} ${tokenInfo.symbol}`);
+        return;
+      }
+      
+      toast.loading(`Borrowing ${tokenInfo.symbol}...`);
+      const tx = await DeLexContract.borrow(selectedPool.id, selectedTokenAddress, amountWei);
+      await tx.wait();
+      
+      toast.dismiss();
+      toast.success(`Borrowed: ${amount} ${tokenInfo.symbol}`);
+      
+      setAmount('');
+      await loadData();
+      await loadPoolSpecificStats();
+      await checkBorrowingAvailability();
+      
+    } catch (error) {
+      toast.dismiss();
+      
+      let errorMessage = 'Failed to borrow tokens';
+      
+      if (error.message.includes('Must deposit tokenB as collateral to borrow tokenA')) {
+        errorMessage = 'You need to deposit the other token as collateral first';
+      } else if (error.message.includes('Must deposit tokenA as collateral to borrow tokenB')) {
+        errorMessage = 'You need to deposit the other token as collateral first';
+      } else if (error.message.includes('Cannot borrow tokenA if you have tokenA as collateral')) {
+        errorMessage = 'Cannot borrow the same token you deposited as collateral';
+      } else if (error.message.includes('Cannot borrow tokenB if you have tokenB as collateral')) {
+        errorMessage = 'Cannot borrow the same token you deposited as collateral';
+      } else if (error.message.includes('Insufficient collateral')) {
+        errorMessage = 'Insufficient collateral - deposit more collateral or borrow less';
+      } else if (error.message.includes('Insufficient liquidity')) {
+        errorMessage = 'Insufficient liquidity in the pool for this borrow amount';
+      }
+      
+      toast.error(errorMessage);
+      console.error('Borrow error:', error);
+    } finally {
+      setLoading(false);
     }
-    
-    toast.error(errorMessage);
-    console.error('Borrow error:', error);
-  } finally {
-    setLoading(false);
-  }
-};
+  };
 
-
+  // Repay tokens function
   const repayTokens = async () => {
     if (!account || !DeLexContract || !selectedPool || !amount || !isValidAddress(selectedTokenAddress)) {
       toast.error('Please fill all required fields');
@@ -687,7 +628,9 @@ const borrowTokens = async () => {
       toast.success(`Repaid: ${amount} ${tokenInfo.symbol}`);
       
       setAmount('');
-      loadData();
+      await loadData();
+      await loadPoolSpecificStats();
+      await checkBorrowingAvailability();
     } catch (error) {
       toast.dismiss();
       
@@ -708,6 +651,117 @@ const borrowTokens = async () => {
     } finally {
       setLoading(false);
     }
+  };
+
+  // Modal functions
+  const calculateMaxWithdrawable = async (poolId, tokenAddress, tokenInfo, currentCollateral) => {
+    try {
+      const position = await DeLexContract.getUserPosition(account, poolId);
+      const pool = await DeLexContract.getPoolInfo(poolId);
+      const collateralFactor = await DeLexContract.COLLATERAL_FACTOR();
+      
+      const [tokenAInfo, tokenBInfo] = await Promise.all([
+        fetchTokenInfo(pool.tokenA),
+        fetchTokenInfo(pool.tokenB)
+      ]);
+      
+      const collateralA = parseFloat(ethers.utils.formatUnits(position.collateralA, tokenAInfo.decimals));
+      const collateralB = parseFloat(ethers.utils.formatUnits(position.collateralB, tokenBInfo.decimals));
+      const borrowedA = parseFloat(ethers.utils.formatUnits(position.borrowedA, tokenAInfo.decimals));
+      const borrowedB = parseFloat(ethers.utils.formatUnits(position.borrowedB, tokenBInfo.decimals));
+      
+      const totalCollateralValue = collateralA + collateralB;
+      const totalBorrowedValue = borrowedA + borrowedB;
+      
+      if (totalBorrowedValue === 0) {
+        return ethers.utils.formatUnits(currentCollateral, tokenInfo.decimals);
+      }
+      
+      const collateralFactorDecimal = parseFloat(ethers.utils.formatEther(collateralFactor));
+      const minCollateralValue = totalBorrowedValue / collateralFactorDecimal;
+      const safeMinCollateralValue = minCollateralValue * 1.1;
+      
+      if (totalCollateralValue <= safeMinCollateralValue) {
+        return '0';
+      }
+      
+      const maxWithdrawableValue = totalCollateralValue - safeMinCollateralValue;
+      const currentCollateralFormatted = parseFloat(ethers.utils.formatUnits(currentCollateral, tokenInfo.decimals));
+      const actualMaxWithdrawable = Math.min(maxWithdrawableValue, currentCollateralFormatted);
+      
+      return Math.max(0, actualMaxWithdrawable).toFixed(6);
+    } catch (error) {
+      console.error('Error calculating max withdrawable:', error);
+      return '0';
+    }
+  };
+
+  const calculateMaxRepayable = async (poolId, tokenAddress, tokenInfo) => {
+    try {
+      const position = await DeLexContract.getUserPosition(account, poolId);
+      const pool = await DeLexContract.getPoolInfo(poolId);
+      
+      let borrowedAmount;
+      if (tokenAddress.toLowerCase() === pool.tokenA.toLowerCase()) {
+        borrowedAmount = position.borrowedA;
+      } else if (tokenAddress.toLowerCase() === pool.tokenB.toLowerCase()) {
+        borrowedAmount = position.borrowedB;
+      } else {
+        return { maxRepayable: '0', borrowed: '0' };
+      }
+      
+      if (borrowedAmount.eq(0)) {
+        return { maxRepayable: '0', borrowed: '0' };
+      }
+      
+      const userBalance = await getTokenBalance(tokenAddress, account);
+      const userBalanceWei = ethers.utils.parseUnits(userBalance, tokenInfo.decimals);
+      
+      const maxRepayableWei = borrowedAmount.gt(userBalanceWei) ? userBalanceWei : borrowedAmount;
+      
+      return {
+        maxRepayable: ethers.utils.formatUnits(maxRepayableWei, tokenInfo.decimals),
+        borrowed: ethers.utils.formatUnits(borrowedAmount, tokenInfo.decimals)
+      };
+    } catch (error) {
+      console.error('Error calculating max repayable:', error);
+      return { maxRepayable: '0', borrowed: '0' };
+    }
+  };
+
+  // Withdrawal modal functions
+  const openWithdrawalModal = async (position, tokenAddress, tokenInfo, currentCollateral) => {
+    try {
+      const maxWithdrawable = await calculateMaxWithdrawable(
+        position.poolId, 
+        tokenAddress, 
+        tokenInfo, 
+        currentCollateral
+      );
+      
+      setWithdrawalModal({
+        isOpen: true,
+        position,
+        tokenAddress,
+        tokenInfo,
+        maxWithdrawable,
+        withdrawAmount: ''
+      });
+    } catch (error) {
+      console.error('Error opening withdrawal modal:', error);
+      toast.error('Failed to calculate withdrawal limits');
+    }
+  };
+
+  const closeWithdrawalModal = () => {
+    setWithdrawalModal({
+      isOpen: false,
+      position: null,
+      tokenAddress: '',
+      tokenInfo: null,
+      maxWithdrawable: '0',
+      withdrawAmount: ''
+    });
   };
 
   const withdrawCollateral = async () => {
@@ -735,7 +789,9 @@ const borrowTokens = async () => {
       toast.success(`Collateral withdrawn: ${withdrawAmount} ${tokenInfo.symbol}`);
       
       closeWithdrawalModal();
-      loadData();
+      await loadData();
+      await loadPoolSpecificStats();
+      await checkBorrowingAvailability();
     } catch (error) {
       toast.dismiss();
       
@@ -753,6 +809,59 @@ const borrowTokens = async () => {
       console.error('Withdraw error:', error);
     } finally {
       setLoading(false);
+    }
+  };
+
+  // Repayment modal functions
+  const openRepaymentModal = async (position, tokenAddress, tokenInfo) => {
+    try {
+      const { maxRepayable, borrowed } = await calculateMaxRepayable(
+        position.poolId, 
+        tokenAddress, 
+        tokenInfo
+      );
+      
+      setRepaymentModal({
+        isOpen: true,
+        position,
+        tokenAddress,
+        tokenInfo,
+        maxRepayable,
+        currentBorrowed: borrowed,
+        repayAmount: ''
+      });
+    } catch (error) {
+      console.error('Error opening repayment modal:', error);
+      toast.error('Failed to calculate repayment limits');
+    }
+  };
+
+  const closeRepaymentModal = () => {
+    setRepaymentModal({
+      isOpen: false,
+      position: null,
+      tokenAddress: '',
+      tokenInfo: null,
+      maxRepayable: '0',
+      currentBorrowed: '0',
+      repayAmount: ''
+    });
+  };
+
+  const refreshRepaymentModal = async () => {
+    if (repaymentModal.isOpen) {
+      const { maxRepayable, borrowed } = await calculateMaxRepayable(
+        repaymentModal.position.poolId, 
+        repaymentModal.tokenAddress, 
+        repaymentModal.tokenInfo
+      );
+      
+      setRepaymentModal(prev => ({
+        ...prev,
+        maxRepayable,
+        currentBorrowed: borrowed,
+        repayAmount: ''
+      }));
     }
   };
 
@@ -827,7 +936,9 @@ const borrowTokens = async () => {
       toast.success(`Repaid: ${parseFloat(finalRepayFormatted).toFixed(6)} ${tokenInfo.symbol}`);
       
       closeRepaymentModal();
-      loadData();
+      await loadData();
+      await loadPoolSpecificStats();
+      await checkBorrowingAvailability();
     } catch (error) {
       toast.dismiss();
       
@@ -848,12 +959,11 @@ const borrowTokens = async () => {
     }
   };
 
-  // FIXED: Better health factor calculation
+  // Utility functions
   const calculatePositionHealthFactor = async (position) => {
     if (!DeLexContract || !account) return 'Unknown';
     
     try {
-      // Manual calculation using position data
       const collateralA = parseFloat(ethers.utils.formatUnits(position.collateralA, position.tokenAInfo.decimals));
       const collateralB = parseFloat(ethers.utils.formatUnits(position.collateralB, position.tokenBInfo.decimals));
       const borrowedA = parseFloat(ethers.utils.formatUnits(position.borrowedA, position.tokenAInfo.decimals));
@@ -865,7 +975,7 @@ const borrowTokens = async () => {
       if (totalBorrowedValue === 0) return 'Safe';
       if (totalCollateralValue === 0) return '0.00';
       
-      const collateralFactor = parseFloat(ethers.utils.formatEther(dashboardStats.collateralFactor));
+      const collateralFactor = parseFloat(ethers.utils.formatEther(poolStats.collateralFactor));
       const maxBorrowCapacity = totalCollateralValue * collateralFactor;
       const healthFactor = maxBorrowCapacity / totalBorrowedValue;
       
@@ -915,21 +1025,21 @@ const borrowTokens = async () => {
 
   const getCollateralFactorPercentage = () => {
     try {
-      const factor = parseFloat(ethers.utils.formatEther(dashboardStats.collateralFactor)) * 100;
+      const factor = parseFloat(ethers.utils.formatEther(poolStats.collateralFactor)) * 100;
       return factor.toFixed(0);
     } catch (error) {
-      return '75'; // fallback
+      return '75';
     }
   };
 
   const getBorrowingUtilization = () => {
     try {
-      if (dashboardStats.totalCollateralValue.eq(0)) return 0;
+      if (poolStats.totalCollateralValue.eq(0)) return 0;
       
-      const maxBorrow = dashboardStats.totalCollateralValue.mul(dashboardStats.collateralFactor).div(ethers.constants.WeiPerEther);
+      const maxBorrow = poolStats.totalCollateralValue.mul(poolStats.collateralFactor).div(ethers.constants.WeiPerEther);
       if (maxBorrow.eq(0)) return 0;
       
-      const utilization = dashboardStats.totalBorrowedValue.mul(10000).div(maxBorrow);
+      const utilization = poolStats.totalBorrowedValue.mul(10000).div(maxBorrow);
       return Math.min(10000, utilization.toNumber()) / 100;
     } catch (error) {
       console.error('Error calculating utilization:', error);
@@ -937,12 +1047,10 @@ const borrowTokens = async () => {
     }
   };
 
-  // FIXED: Better health factor formatting
   const formatHealthFactor = (healthFactor) => {
     if (healthFactor.eq(0)) return 'Safe';
     try {
       const formatted = parseFloat(ethers.utils.formatEther(healthFactor));
-      // Prevent extremely large numbers
       if (formatted > 1000000) return 'Safe';
       return formatted.toFixed(2);
     } catch (error) {
@@ -950,32 +1058,32 @@ const borrowTokens = async () => {
     }
   };
 
+  // Continue with render code in Part 3...
+
+  // Early returns for loading states
   if (!contractsReady || !signer) {
-  return (
-    <div className="max-w-6xl mx-auto">
-      <div className="flex justify-center items-center py-12">
-        <div className="text-electric-purple font-cyber text-lg animate-pulse">
-          Initializing contracts...
+    return (
+      <div className="max-w-6xl mx-auto">
+        <div className="flex justify-center items-center py-12">
+          <div className="text-electric-purple font-cyber text-lg animate-pulse">
+            Initializing contracts...
+          </div>
         </div>
       </div>
-    </div>
-  );
-}
+    );
+  }
 
   if (!account) {
     return (
       <div className="max-w-6xl mx-auto">
-        {/* Show wallet connection prompt inside component if needed */}
-    {!account && (
-      <div className="mb-6">
-        <div className="cyber-card border-laser-orange rounded-xl p-8 text-center">
-          <div className="text-laser-orange font-cyber text-lg mb-4">
-            Wallet Not Connected
+        <div className="mb-6">
+          <div className="cyber-card border-laser-orange rounded-xl p-8 text-center">
+            <div className="text-laser-orange font-cyber text-lg mb-4">
+              Wallet Not Connected
+            </div>
+            <p className="text-gray-400">Please connect your wallet to access lending features</p>
           </div>
-          <p className="text-gray-400">Please connect your wallet to access lending features</p>
         </div>
-      </div>
-    )}
       </div>
     );
   }
@@ -1238,102 +1346,206 @@ const borrowTokens = async () => {
       {/* Dashboard Tab */}
       {activeTab === 'dashboard' && (
         <div className="space-y-6">
-          {/* Overview Stats */}
-          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-            <div className="cyber-card border-neon-green rounded-xl p-4 text-center thin-neon-border">
-              <div className="text-2xl font-cyber text-neon-green mb-1">
-                ${formatValue(dashboardStats.totalCollateralValue)}
-              </div>
-              <div className="text-gray-400 text-sm">Total Collateral</div>
-            </div>
-            <div className="cyber-card border-hot-pink rounded-xl p-4 text-center thin-neon-border">
-              <div className="text-2xl font-cyber text-hot-pink mb-1">
-                ${formatValue(dashboardStats.totalBorrowedValue)}
-              </div>
-              <div className="text-gray-400 text-sm">Total Borrowed</div>
-            </div>
-            <div className="cyber-card border-electric-purple rounded-xl p-4 text-center thin-neon-border">
-              <div className="text-2xl font-cyber text-electric-purple mb-1">
-                ${formatValue(dashboardStats.totalAvailableToBorrow)}
-              </div>
-              <div className="text-gray-400 text-sm">Available to Borrow</div>
-            </div>
-            <div className="cyber-card border-laser-orange rounded-xl p-4 text-center thin-neon-border">
-              <div className={`text-2xl font-cyber mb-1 ${getHealthFactorColor(formatHealthFactor(dashboardStats.overallHealthFactor))}`}>
-                {formatHealthFactor(dashboardStats.overallHealthFactor)}
-              </div>
-              <div className="text-gray-400 text-sm">Health Factor</div>
-            </div>
-          </div>
-
-          {/* Borrowing Power */}
+          {/* Pool Selection for Dashboard */}
           <div className="cyber-card border-cyber-blue rounded-xl p-6 thin-neon-border">
-            <h3 className="text-xl font-cyber text-cyber-blue mb-4">Borrowing Power</h3>
-            <div className="flex items-center mb-4">
-              <div className="flex-1 bg-gray-700 rounded-full h-4">
-                <div 
-                  className="bg-gradient-to-r from-neon-green to-electric-purple h-4 rounded-full transition-all duration-500"
-                  style={{ width: `${getBorrowingUtilization()}%` }}
-                ></div>
-              </div>
-              <div className="ml-4 text-white font-cyber">
-                {getBorrowingUtilization().toFixed(1)}%
-              </div>
-            </div>
-            <div className="grid grid-cols-3 gap-4 text-sm">
-              <div>
-                <span className="text-gray-400">Used:</span>
-                <span className="text-white ml-2">${formatValue(dashboardStats.totalBorrowedValue)}</span>
-              </div>
-              <div>
-                <span className="text-gray-400">Available:</span>
-                <span className="text-white ml-2">${formatValue(dashboardStats.totalAvailableToBorrow)}</span>
-              </div>
-              <div>
-                <span className="text-gray-400">Collateral Factor:</span>
-                <span className="text-white ml-2">{getCollateralFactorPercentage()}%</span>
-              </div>
+            <h3 className="text-xl font-cyber text-cyber-blue mb-4">Select Pool for Detailed View</h3>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {pools.map(pool => (
+                <button
+                  key={pool.id}
+                  onClick={() => setSelectedPool(pool)}
+                  className={`p-4 border rounded-lg transition-all ${
+                    selectedPool?.id === pool.id
+                      ? 'border-neon-green bg-neon-green bg-opacity-20 text-neon-green'
+                      : 'border-gray-600 text-gray-300 hover:border-gray-500'
+                  }`}
+                >
+                  <div className="font-cyber text-lg">
+                    {pool.tokenAInfo.symbol} / {pool.tokenBInfo.symbol}
+                  </div>
+                  <div className="text-xs opacity-75">
+                    TVL: ${(parseFloat(ethers.utils.formatEther(pool.reserveA)) + parseFloat(ethers.utils.formatEther(pool.reserveB))).toFixed(2)}
+                  </div>
+                  {selectedPool?.id === pool.id && (
+                    <div className="text-xs font-bold mt-1">SELECTED</div>
+                  )}
+                </button>
+              ))}
             </div>
           </div>
 
-          {/* Your Positions */}
-          <div className="cyber-card border-laser-orange rounded-xl p-6 thin-neon-border">
-            <h3 className="text-xl font-cyber text-laser-orange mb-4">
-              Your Positions ({userPositions.length})
-            </h3>
-            
-            {userPositions.length === 0 ? (
-              <div className="text-center py-8">
-                <p className="text-gray-400 font-cyber mb-4">
-                  No lending positions found.
-                </p>
-                <p className="text-gray-500 text-sm mb-6">
-                  Start by depositing collateral to begin lending and borrowing.
-                </p>
-                <button
-                  onClick={() => setActiveTab('deposit')}
-                  className="px-6 py-3 bg-neon-green text-black font-cyber rounded-lg hover:bg-opacity-80 transition-all"
-                >
-                  Deposit Collateral
-                </button>
+          {/* Pool-Specific Overview Stats */}
+          {selectedPool && (
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+              <div className="cyber-card border-neon-green rounded-xl p-4 text-center thin-neon-border">
+                <div className="text-2xl font-cyber text-neon-green mb-1">
+                  ${formatValue(poolStats.totalCollateralValue)}
+                </div>
+                <div className="text-gray-400 text-sm">Your Collateral</div>
+                <div className="text-gray-500 text-xs mt-1">in {selectedPool.tokenAInfo.symbol}/{selectedPool.tokenBInfo.symbol}</div>
               </div>
-            ) : (
+              <div className="cyber-card border-hot-pink rounded-xl p-4 text-center thin-neon-border">
+                <div className="text-2xl font-cyber text-hot-pink mb-1">
+                  ${formatValue(poolStats.totalBorrowedValue)}
+                </div>
+                <div className="text-gray-400 text-sm">Your Borrowed</div>
+                <div className="text-gray-500 text-xs mt-1">in {selectedPool.tokenAInfo.symbol}/{selectedPool.tokenBInfo.symbol}</div>
+              </div>
+              <div className="cyber-card border-electric-purple rounded-xl p-4 text-center thin-neon-border">
+                <div className="text-2xl font-cyber text-electric-purple mb-1">
+                  ${formatValue(poolStats.totalAvailableToBorrow)}
+                </div>
+                <div className="text-gray-400 text-sm">Available to Borrow</div>
+                <div className="text-gray-500 text-xs mt-1">from this pool</div>
+              </div>
+              <div className="cyber-card border-laser-orange rounded-xl p-4 text-center thin-neon-border">
+                <div className={`text-2xl font-cyber mb-1 ${getHealthFactorColor(formatHealthFactor(poolStats.healthFactor))}`}>
+                  {formatHealthFactor(poolStats.healthFactor)}
+                </div>
+                <div className="text-gray-400 text-sm">Health Factor</div>
+                <div className="text-gray-500 text-xs mt-1">for this pool</div>
+              </div>
+            </div>
+          )}
+
+          {/* Pool-Specific Borrowing Power */}
+          {selectedPool && poolStats.hasPosition && (
+            <div className="cyber-card border-cyber-blue rounded-xl p-6 thin-neon-border">
+              <h3 className="text-xl font-cyber text-cyber-blue mb-4">
+                Borrowing Power in {selectedPool.tokenAInfo.symbol}/{selectedPool.tokenBInfo.symbol}
+              </h3>
+              <div className="flex items-center mb-4">
+                <div className="flex-1 bg-gray-700 rounded-full h-4">
+                  <div 
+                    className="bg-gradient-to-r from-neon-green to-electric-purple h-4 rounded-full transition-all duration-500"
+                    style={{ width: `${getBorrowingUtilization()}%` }}
+                  ></div>
+                </div>
+                <div className="ml-4 text-white font-cyber">
+                  {getBorrowingUtilization().toFixed(1)}%
+                </div>
+              </div>
+              <div className="grid grid-cols-3 gap-4 text-sm">
+                <div>
+                  <span className="text-gray-400">Used:</span>
+                  <span className="text-white ml-2">${formatValue(poolStats.totalBorrowedValue)}</span>
+                </div>
+                <div>
+                  <span className="text-gray-400">Available:</span>
+                  <span className="text-white ml-2">${formatValue(poolStats.totalAvailableToBorrow)}</span>
+                </div>
+                <div>
+                  <span className="text-gray-400">Collateral Factor:</span>
+                  <span className="text-white ml-2">{getCollateralFactorPercentage()}%</span>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Borrowing Instructions for Selected Pool */}
+          {selectedPool && borrowingState.canBorrow && (
+            <div className="cyber-card border-electric-purple rounded-xl p-6 thin-neon-border">
+              <h3 className="text-xl font-cyber text-electric-purple mb-4">Borrowing Available</h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <div className="text-sm text-gray-400 mb-2">Your Collateral:</div>
+                  <div className="text-neon-green font-cyber">
+                    {borrowingState.collateralToken && formatAmount(
+                      borrowingState.collateralToken.amount, 
+                      borrowingState.collateralToken.info.decimals
+                    )} {borrowingState.collateralToken?.info.symbol}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-sm text-gray-400 mb-2">Available to Borrow:</div>
+                  <div className="text-hot-pink font-cyber">
+                    Up to {parseFloat(borrowingState.maxBorrowAmount).toFixed(4)} {borrowingState.availableTokenToBorrow?.info.symbol}
+                  </div>
+                </div>
+              </div>
+              <div className="mt-4 p-3 bg-gray-900 rounded-lg">
+                <div className="text-cyber-blue text-sm font-cyber mb-1">Cross-Token Borrowing Rule:</div>
+                <div className="text-gray-400 text-xs">
+                  You deposited {borrowingState.collateralToken?.info.symbol} as collateral, so you can only borrow {borrowingState.availableTokenToBorrow?.info.symbol} from this pool.
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* No Position Message */}
+          {selectedPool && !poolStats.hasPosition && (
+            <div className="cyber-card border-gray-600 rounded-xl p-8 text-center">
+              <div className="text-gray-400 font-cyber text-lg mb-4">
+                No Position in {selectedPool.tokenAInfo.symbol}/{selectedPool.tokenBInfo.symbol}
+              </div>
+              <p className="text-gray-500 text-sm mb-6">
+                You haven't deposited any collateral or borrowed any tokens from this pool yet.
+              </p>
+              <button
+                onClick={() => setActiveTab('deposit')}
+                className="px-6 py-3 bg-neon-green text-black font-cyber rounded-lg hover:bg-opacity-80 transition-all"
+              >
+                Deposit Collateral to Start
+              </button>
+            </div>
+          )}
+
+          {/* Your Position in Selected Pool */}
+          {selectedPool && selectedPoolPosition && (
+            <div className="cyber-card border-laser-orange rounded-xl p-6 thin-neon-border">
+              <h3 className="text-xl font-cyber text-laser-orange mb-4">
+                Your Position in {selectedPool.tokenAInfo.symbol}/{selectedPool.tokenBInfo.symbol}
+              </h3>
+              
+              <PositionCard 
+                position={{
+                  poolId: selectedPool.id,
+                  pool: selectedPool,
+                  tokenAInfo: selectedPool.tokenAInfo,
+                  tokenBInfo: selectedPool.tokenBInfo,
+                  ...selectedPoolPosition
+                }}
+                onWithdraw={openWithdrawalModal} 
+                onRepay={openRepaymentModal}
+                loading={loading}
+                calculateHealthFactor={calculatePositionHealthFactor}
+                formatAmount={formatAmount}
+                getHealthFactorColor={getHealthFactorColor}
+              />
+            </div>
+          )}
+
+          {/* All User Positions Summary */}
+          {userPositions.length > 0 && (
+            <div className="cyber-card border-gray-500 rounded-xl p-6 thin-neon-border">
+              <h3 className="text-xl font-cyber text-gray-400 mb-4">
+                All Your Positions ({userPositions.length} pools)
+              </h3>
               <div className="space-y-4">
                 {userPositions.map((position, index) => (
-                  <PositionCard 
-                    key={index} 
-                    position={position} 
-                    onWithdraw={openWithdrawalModal} 
-                    onRepay={openRepaymentModal}
-                    loading={loading}
-                    calculateHealthFactor={calculatePositionHealthFactor}
-                    formatAmount={formatAmount}
-                    getHealthFactorColor={getHealthFactorColor}
-                  />
+                  <div 
+                    key={index}
+                    className={`p-4 border rounded-lg transition-all cursor-pointer ${
+                      selectedPool?.id === position.poolId
+                        ? 'border-neon-green bg-neon-green bg-opacity-10'
+                        : 'border-gray-600 hover:border-gray-500'
+                    }`}
+                    onClick={() => {
+                      const pool = pools.find(p => p.id === position.poolId);
+                      if (pool) setSelectedPool(pool);
+                    }}
+                  >
+                    <PositionSummary 
+                      position={position} 
+                      calculateHealthFactor={calculatePositionHealthFactor}
+                      getHealthFactorColor={getHealthFactorColor}
+                      isSelected={selectedPool?.id === position.poolId}
+                    />
+                  </div>
                 ))}
               </div>
-            )}
-          </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -1353,7 +1565,10 @@ const borrowTokens = async () => {
               <label className="text-gray-300 font-cyber mb-2 block">Select Pool:</label>
               <select
                 value={selectedPool?.id || ''}
-                onChange={(e) => setSelectedPool(pools.find(p => p.id === e.target.value))}
+                onChange={(e) => {
+                  const pool = pools.find(p => p.id === e.target.value);
+                  setSelectedPool(pool);
+                }}
                 className="w-full bg-black border border-gray-600 rounded-lg px-3 py-2 text-white font-cyber"
               >
                 <option value="">Select a pool</option>
@@ -1366,7 +1581,7 @@ const borrowTokens = async () => {
             </div>
 
             {/* Token Selection for Pool */}
-            {selectedPool && (
+            {selectedPool && activeTab !== 'borrow' && (
               <div className="mb-4">
                 <label className="text-gray-300 font-cyber mb-2 block">Select Token:</label>
                 <div className="grid grid-cols-2 gap-2">
@@ -1388,19 +1603,75 @@ const borrowTokens = async () => {
               </div>
             )}
 
-            {/* Custom Token Input */}
+            {/* Borrow Token Display (Fixed for cross-token borrowing) */}
+            {selectedPool && activeTab === 'borrow' && (
+              <div className="mb-4">
+                <label className="text-gray-300 font-cyber mb-2 block">Available to Borrow:</label>
+                {borrowingState.canBorrow ? (
+                  <div className="p-3 border border-electric-purple rounded-lg bg-electric-purple bg-opacity-20">
+                    <div className="text-electric-purple font-cyber text-lg">
+                      {borrowingState.availableTokenToBorrow.info.symbol}
+                    </div>
+                    <div className="text-gray-400 text-sm">
+                      Max: {parseFloat(borrowingState.maxBorrowAmount).toFixed(4)} {borrowingState.availableTokenToBorrow.info.symbol}
+                    </div>
+                    <div className="text-gray-500 text-xs mt-1">
+                      Token: {borrowingState.availableTokenToBorrow.address.slice(0, 8)}...
+                    </div>
+                  </div>
+                ) : (
+                  <div className="p-3 border border-red-500 rounded-lg bg-red-900 bg-opacity-20">
+                    <div className="text-red-400 font-cyber text-sm">
+                      No borrowing available
+                    </div>
+                    <div className="text-gray-400 text-xs mt-1">
+                      Deposit collateral first to enable borrowing
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Amount Input */}
             <div className="mb-6">
-              <label className="text-gray-300 font-cyber mb-2 block">Or Enter Custom Token:</label>
-              <TokenInput
-                label=""
-                tokenAddress={selectedTokenAddress}
-                onTokenChange={setSelectedTokenAddress}
-                amount={amount}
-                onAmountChange={setAmount}
-                placeholder="Enter any token address"
-                showBalance={true}
+              <label className="text-gray-300 font-cyber mb-2 block">Amount:</label>
+              <input
+                type="number"
+                value={amount}
+                onChange={(e) => setAmount(e.target.value)}
+                placeholder="Enter amount"
+                className="w-full bg-black border border-gray-600 rounded-lg px-3 py-2 text-white font-cyber"
               />
+              
+              {/* Borrow Limits Display */}
+              {activeTab === 'borrow' && borrowingState.canBorrow && (
+                <div className="mt-2 flex justify-between items-center">
+                  <span className="text-gray-400 text-sm">
+                    Max: {parseFloat(borrowingState.maxBorrowAmount).toFixed(4)}
+                  </span>
+                  <button
+                    onClick={() => setAmount(borrowingState.maxBorrowAmount)}
+                    className="px-2 py-1 bg-electric-purple text-black text-xs rounded hover:bg-opacity-80"
+                  >
+                    Max
+                  </button>
+                </div>
+              )}
             </div>
+
+            {/* Cross-token Borrowing Warning */}
+            {activeTab === 'borrow' && selectedPool && !borrowingState.canBorrow && (
+              <div className="mb-4 p-3 bg-yellow-900 bg-opacity-30 border border-yellow-500 rounded-lg">
+                <div className="text-yellow-400 text-sm font-cyber mb-2">
+                  ⚠️ Cross-Token Borrowing Rules
+                </div>
+                <div className="text-yellow-300 text-xs space-y-1">
+                  <div>• You can only borrow the token you didn't deposit as collateral</div>
+                  <div>• Deposit {selectedPool.tokenAInfo.symbol} to borrow {selectedPool.tokenBInfo.symbol}</div>
+                  <div>• Deposit {selectedPool.tokenBInfo.symbol} to borrow {selectedPool.tokenAInfo.symbol}</div>
+                </div>
+              </div>
+            )}
 
             {/* Action Button */}
             <button
@@ -1409,7 +1680,10 @@ const borrowTokens = async () => {
                 else if (activeTab === 'borrow') borrowTokens();
                 else if (activeTab === 'repay') repayTokens();
               }}
-              disabled={loading || !account || !amount || !selectedPool || !isValidAddress(selectedTokenAddress)}
+              disabled={loading || !account || !amount || !selectedPool || 
+                       (activeTab === 'borrow' && !borrowingState.canBorrow) ||
+                       (activeTab !== 'borrow' && !isValidAddress(selectedTokenAddress)) ||
+                       (activeTab === 'borrow' && borrowingState.canBorrow && !borrowingState.availableTokenToBorrow)}
               className={`w-full py-3 font-cyber text-lg rounded-lg transition-all neon-border disabled:opacity-50 ${
                 activeTab === 'deposit' ? 'bg-neon-green border-neon-green text-black' :
                 activeTab === 'borrow' ? 'bg-electric-purple border-electric-purple text-black' :
@@ -1418,7 +1692,8 @@ const borrowTokens = async () => {
             >
               {loading ? 'Processing...' : 
                activeTab === 'deposit' ? 'Deposit Collateral' :
-               activeTab === 'borrow' ? 'Borrow Tokens' : 'Repay Tokens'}
+               activeTab === 'borrow' ? (borrowingState.canBorrow ? 'Borrow Tokens' : 'Deposit Collateral First') :
+               'Repay Tokens'}
             </button>
 
             {/* Pool Information */}
@@ -1437,107 +1712,133 @@ const borrowTokens = async () => {
             )}
           </div>
 
-          {/* Dashboard Summary Panel */}
+          {/* Pool-Specific Lending Summary Panel */}
           <div className="cyber-card border-laser-orange rounded-xl p-6 pencil-effect">
             <h3 className="text-xl font-cyber text-laser-orange mb-4 animate-glow">
-              Your Lending Summary
+              {selectedPool ? `${selectedPool.tokenAInfo.symbol}/${selectedPool.tokenBInfo.symbol} Pool Summary` : 'Select Pool for Summary'}
             </h3>
             
-            <div className="space-y-4">
-              {/* Quick Stats */}
-              <div className="grid grid-cols-2 gap-4">
-                <div className="p-3 bg-gray-900 rounded-lg">
-                  <div className="text-neon-green font-cyber text-lg">
-                    ${formatValue(dashboardStats.totalCollateralValue)}
+            {selectedPool ? (
+              <div className="space-y-4">
+                {/* Pool-Specific Quick Stats */}
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="p-3 bg-gray-900 rounded-lg">
+                    <div className="text-neon-green font-cyber text-lg">
+                      ${formatValue(poolStats.totalCollateralValue)}
+                    </div>
+                    <div className="text-gray-400 text-xs">Your Collateral</div>
                   </div>
-                  <div className="text-gray-400 text-xs">Total Collateral</div>
-                </div>
-                <div className="p-3 bg-gray-900 rounded-lg">
-                  <div className="text-hot-pink font-cyber text-lg">
-                    ${formatValue(dashboardStats.totalBorrowedValue)}
-                  </div>
-                  <div className="text-gray-400 text-xs">Total Borrowed</div>
-                </div>
-              </div>
-              
-              <div className="p-3 bg-gray-900 rounded-lg">
-                <div className="text-electric-purple font-cyber text-lg">
-                  ${formatValue(dashboardStats.totalAvailableToBorrow)}
-                </div>
-                <div className="text-gray-400 text-xs">Available to Borrow</div>
-              </div>
-              
-              <div className="p-3 bg-gray-900 rounded-lg">
-                <div className={`font-cyber text-lg ${getHealthFactorColor(formatHealthFactor(dashboardStats.overallHealthFactor))}`}>
-                  {formatHealthFactor(dashboardStats.overallHealthFactor)}
-                </div>
-                <div className="text-gray-400 text-xs">Overall Health Factor</div>
-              </div>
-
-              {/* Health Factor Warning */}
-              {dashboardStats.overallHealthFactor.gt(0) && 
-               parseFloat(ethers.utils.formatEther(dashboardStats.overallHealthFactor)) < 1.5 && 
-               parseFloat(ethers.utils.formatEther(dashboardStats.overallHealthFactor)) < 1000000 && (
-                <div className="p-3 bg-red-900 bg-opacity-30 border border-red-500 rounded-lg">
-                  <div className="text-red-400 font-cyber text-sm mb-1">
-                    ⚠️ Health Factor Warning
-                  </div>
-                  <div className="text-red-300 text-xs">
-                    Your health factor is low. Consider repaying loans or adding more collateral.
+                  <div className="p-3 bg-gray-900 rounded-lg">
+                    <div className="text-hot-pink font-cyber text-lg">
+                      ${formatValue(poolStats.totalBorrowedValue)}
+                    </div>
+                    <div className="text-gray-400 text-xs">Your Borrowed</div>
                   </div>
                 </div>
-              )}
-
-              {/* Quick Actions */}
-              <div className="space-y-2">
-                <button
-                  onClick={() => setActiveTab('dashboard')}
-                  className="w-full py-2 bg-cyber-blue text-black font-cyber rounded-lg hover:bg-opacity-80 transition-all text-sm"
-                >
-                  View Full Dashboard
-                </button>
                 
-                {dashboardStats.totalAvailableToBorrow.gt(0) && (
-                  <button
-                    onClick={() => setActiveTab('borrow')}
-                    className="w-full py-2 bg-electric-purple text-black font-cyber rounded-lg hover:bg-opacity-80 transition-all text-sm"
-                  >
-                    Borrow More (${formatValue(dashboardStats.totalAvailableToBorrow)} Available)
-                  </button>
-                )}
+                <div className="p-3 bg-gray-900 rounded-lg">
+                  <div className="text-electric-purple font-cyber text-lg">
+                    ${formatValue(poolStats.totalAvailableToBorrow)}
+                  </div>
+                  <div className="text-gray-400 text-xs">Available to Borrow</div>
+                </div>
                 
-                {dashboardStats.totalBorrowedValue.gt(0) && (
-                  <button
-                    onClick={() => setActiveTab('repay')}
-                    className="w-full py-2 bg-hot-pink text-black font-cyber rounded-lg hover:bg-opacity-80 transition-all text-sm"
-                  >
-                    Repay Loans
-                  </button>
-                )}
-              </div>
+                <div className="p-3 bg-gray-900 rounded-lg">
+                  <div className={`font-cyber text-lg ${getHealthFactorColor(formatHealthFactor(poolStats.healthFactor))}`}>
+                    {formatHealthFactor(poolStats.healthFactor)}
+                  </div>
+                  <div className="text-gray-400 text-xs">Health Factor</div>
+                </div>
 
-              {/* Recent Activity */}
-              {userPositions.length > 0 && (
-                <div className="mt-6">
-                  <h4 className="text-gray-300 font-cyber text-sm mb-3">Your Active Positions:</h4>
-                  <div className="space-y-2">
-                    {userPositions.slice(0, 3).map((position, index) => (
+                {/* Pool Health Factor Warning */}
+                {poolStats.healthFactor.gt(0) && 
+                 parseFloat(ethers.utils.formatEther(poolStats.healthFactor)) < 1.5 && 
+                 parseFloat(ethers.utils.formatEther(poolStats.healthFactor)) < 1000000 && (
+                  <div className="p-3 bg-red-900 bg-opacity-30 border border-red-500 rounded-lg">
+                    <div className="text-red-400 font-cyber text-sm mb-1">
+                      ⚠️ Health Factor Warning
+                    </div>
+                    <div className="text-red-300 text-xs">
+                      Your health factor is low for this pool. Consider repaying loans or adding more collateral.
+                    </div>
+                  </div>
+                )}
+
+                {/* Borrowing State Info */}
+                {borrowingState.canBorrow && (
+                  <div className="p-3 bg-green-900 bg-opacity-30 border border-green-500 rounded-lg">
+                    <div className="text-green-400 font-cyber text-sm mb-1">
+                      ✅ Borrowing Available
+                    </div>
+                    <div className="text-green-300 text-xs">
+                      You can borrow up to {parseFloat(borrowingState.maxBorrowAmount).toFixed(4)} {borrowingState.availableTokenToBorrow?.info.symbol}
+                    </div>
+                  </div>
+                )}
+
+                {/* Quick Actions */}
+                <div className="space-y-2">
+                  <button
+                    onClick={() => setActiveTab('dashboard')}
+                    className="w-full py-2 bg-cyber-blue text-black font-cyber rounded-lg hover:bg-opacity-80 transition-all text-sm"
+                  >
+                    View Pool Dashboard
+                  </button>
+                  
+                  {poolStats.totalAvailableToBorrow.gt(0) && borrowingState.canBorrow && (
+                    <button
+                      onClick={() => {
+                        setActiveTab('borrow');
+                        if (borrowingState.availableTokenToBorrow) {
+                          setSelectedTokenAddress(borrowingState.availableTokenToBorrow.address);
+                        }
+                      }}
+                      className="w-full py-2 bg-electric-purple text-black font-cyber rounded-lg hover:bg-opacity-80 transition-all text-sm"
+                    >
+                      Borrow {borrowingState.availableTokenToBorrow?.info.symbol} (${formatValue(poolStats.totalAvailableToBorrow)} Available)
+                    </button>
+                  )}
+                  
+                  {poolStats.totalBorrowedValue.gt(0) && (
+                    <button
+                      onClick={() => setActiveTab('repay')}
+                      className="w-full py-2 bg-hot-pink text-black font-cyber rounded-lg hover:bg-opacity-80 transition-all text-sm"
+                    >
+                      Repay Loans
+                    </button>
+                  )}
+                </div>
+
+                {/* Pool Position Details */}
+                {poolStats.hasPosition && (
+                  <div className="mt-6">
+                    <h4 className="text-gray-300 font-cyber text-sm mb-3">Position Details:</h4>
+                    <div className="space-y-2">
                       <PositionSummary 
-                        key={index} 
-                        position={position} 
+                        position={{
+                          poolId: selectedPool.id,
+                          tokenAInfo: selectedPool.tokenAInfo,
+                          tokenBInfo: selectedPool.tokenBInfo,
+                          ...selectedPoolPosition
+                        }}
                         calculateHealthFactor={calculatePositionHealthFactor}
                         getHealthFactorColor={getHealthFactorColor}
+                        isSelected={true}
                       />
-                    ))}
-                    {userPositions.length > 3 && (
-                      <div className="text-center text-gray-400 text-xs">
-                        +{userPositions.length - 3} more positions
-                      </div>
-                    )}
+                    </div>
                   </div>
-                </div>
-              )}
-            </div>
+                )}
+              </div>
+            ) : (
+              <div className="text-center py-8">
+                <p className="text-gray-400 font-cyber mb-4">
+                  No Pool Selected
+                </p>
+                <p className="text-gray-500 text-sm">
+                  Select a pool above to view detailed lending information and perform actions.
+                </p>
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -1545,7 +1846,7 @@ const borrowTokens = async () => {
   );
 };
 
-// Position Card Component
+// Position Card Component (Updated for better display)
 const PositionCard = ({ 
   position, 
   onWithdraw, 
@@ -1675,11 +1976,12 @@ const PositionCard = ({
   );
 };
 
-// Position Summary Component
+// Position Summary Component (Updated for better display)
 const PositionSummary = ({ 
   position, 
   calculateHealthFactor, 
-  getHealthFactorColor 
+  getHealthFactorColor,
+  isSelected = false
 }) => {
   const [healthFactor, setHealthFactor] = useState('Loading...');
 
@@ -1692,13 +1994,14 @@ const PositionSummary = ({
   }, [position, calculateHealthFactor]);
 
   return (
-    <div className="p-2 bg-gray-800 rounded text-xs">
+    <div className={`p-2 rounded text-xs ${isSelected ? 'bg-neon-green bg-opacity-20' : 'bg-gray-800'}`}>
       <div className="flex justify-between items-center">
-        <span className="text-white">
+        <span className="text-white font-cyber">
           {position.tokenAInfo.symbol}/{position.tokenBInfo.symbol}
+          {isSelected && <span className="text-neon-green ml-2">⭐</span>}
         </span>
         <span className={`font-cyber ${getHealthFactorColor(healthFactor)}`}>
-          {healthFactor}
+          HF: {healthFactor}
         </span>
       </div>
     </div>
