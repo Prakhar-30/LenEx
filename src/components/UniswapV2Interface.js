@@ -7,7 +7,7 @@ const CHAIN_CONFIG = {
   sepolia: {
     chainId: 11155111,
     name: 'Sepolia',
-    rpcUrl: 'https://ethereum-sepolia-rpc.publicnode.com',
+    rpcUrl: 'https://rpc.sepolia.org',
     explorerUrl: 'https://sepolia.etherscan.io',
     routerAddress: '0xC532a74256D3Db42D0Bf7a0400fEFDbad7694008',
     factoryAddress: '0x7E0987E5b3a30e3f2828572Bb659A548460a3003',
@@ -89,6 +89,8 @@ const UniswapV2Interface = () => {
   const [pairData, setPairData] = useState(null);
   const [priceHistory, setPriceHistory] = useState([]);
   const [visualizeLoading, setVisualizeLoading] = useState(false);
+  const [selectedTimeRange, setSelectedTimeRange] = useState('1w');
+  const [historyProgress, setHistoryProgress] = useState(0);
   
   // Create pair state
   const [tokenA, setTokenA] = useState('');
@@ -330,7 +332,7 @@ const UniswapV2Interface = () => {
   };
 
   // Fetch pair data for visualization
-  const fetchPairData = async () => {
+  const fetchPairData = async (skipHistory = false) => {
     if (!pairAddress || !ethers.utils.isAddress(pairAddress)) {
       setError('Please enter a valid pair address');
       return;
@@ -343,7 +345,10 @@ const UniswapV2Interface = () => {
 
     setVisualizeLoading(true);
     setError('');
-    setPairData(null);
+    if (!skipHistory) {
+      setPairData(null);
+      setPriceHistory([]);
+    }
 
     try {
       const pairContract = new ethers.Contract(pairAddress, PAIR_ABI, provider);
@@ -367,10 +372,13 @@ const UniswapV2Interface = () => {
       setPairData({
         token0: { ...token0Data, reserve: parseFloat(reserve0) },
         token1: { ...token1Data, reserve: parseFloat(reserve1) },
-        currentPrice
+        currentPrice,
+        pairContract
       });
 
-      await fetchHistoricalPrices(pairContract, token0Data, token1Data);
+      if (!skipHistory) {
+        await fetchHistoricalPrices(pairContract, token0Data, token1Data, selectedTimeRange);
+      }
     } catch (err) {
       console.error('Error fetching pair data:', err);
       setError(`Failed to fetch pair data: ${err.message}`);
@@ -379,17 +387,55 @@ const UniswapV2Interface = () => {
     }
   };
 
-  const fetchHistoricalPrices = async (pairContract, token0Data, token1Data) => {
+  // Handle time range change
+  const handleTimeRangeChange = async (newRange) => {
+    setSelectedTimeRange(newRange);
+    if (pairData && pairData.pairContract) {
+      setVisualizeLoading(true);
+      setPriceHistory([]);
+      try {
+        await fetchHistoricalPrices(
+          pairData.pairContract,
+          pairData.token0,
+          pairData.token1,
+          newRange
+        );
+      } catch (err) {
+        console.error('Error changing time range:', err);
+      } finally {
+        setVisualizeLoading(false);
+      }
+    }
+  };
+
+  const fetchHistoricalPrices = async (pairContract, token0Data, token1Data, timeRange = '1w') => {
     try {
+      setHistoryProgress(0);
       const currentBlock = await provider.getBlockNumber();
-      const blocksPerDay = selectedChain === 'base' ? 43200 : 7200;
-      const daysToFetch = 30;
-      const blockStep = blocksPerDay;
+      
+      // Calculate blocks based on time range
+      const timeRangeConfig = {
+        '1h': { blocks: 300, step: 10, label: '1 Hour' },        // ~1 hour (30 data points)
+        '1d': { blocks: 7200, step: 240, label: '1 Day' },       // ~1 day (30 data points)
+        '1w': { blocks: 50400, step: 1680, label: '1 Week' },    // ~1 week (30 data points)
+        '1m': { blocks: 216000, step: 7200, label: '1 Month' },  // ~30 days (30 data points)
+        '3m': { blocks: 648000, step: 21600, label: '3 Months' },// ~90 days (30 data points)
+        '6m': { blocks: 1296000, step: 43200, label: '6 Months' },// ~180 days (30 data points)
+        'ytd': { blocks: 2592000, step: 86400, label: 'Year to Date' } // ~1 year (30 data points)
+      };
+
+      const config = timeRangeConfig[timeRange] || timeRangeConfig['1w'];
+      const totalBlocks = config.blocks;
+      const blockStep = config.step;
+      const dataPoints = 30;
 
       const historicalData = [];
+      let successfulFetches = 0;
 
-      for (let i = 0; i < daysToFetch; i++) {
-        const blockNumber = currentBlock - (i * blockStep);
+      console.log(`Fetching ${config.label} data...`);
+
+      for (let i = 0; i < dataPoints; i++) {
+        const blockNumber = currentBlock - (totalBlocks - (i * blockStep));
         if (blockNumber < 0) break;
 
         try {
@@ -397,30 +443,56 @@ const UniswapV2Interface = () => {
           const reserve0 = parseFloat(ethers.utils.formatUnits(reserves.reserve0, token0Data.decimals));
           const reserve1 = parseFloat(ethers.utils.formatUnits(reserves.reserve1, token1Data.decimals));
           
-          if (reserve0 > 0) {
+          if (reserve0 > 0 && reserve1 > 0) {
             const price = reserve1 / reserve0;
             const block = await provider.getBlock(blockNumber);
             const timestamp = block.timestamp;
             const date = new Date(timestamp * 1000);
             
-            historicalData.unshift({
-              date: date.toLocaleDateString(),
+            // Format date based on time range
+            let dateLabel;
+            if (timeRange === '1h' || timeRange === '1d') {
+              dateLabel = date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+            } else {
+              dateLabel = date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+            }
+            
+            historicalData.push({
+              date: dateLabel,
               price: price,
-              block: blockNumber
+              block: blockNumber,
+              timestamp: timestamp
             });
+            
+            successfulFetches++;
           }
         } catch (err) {
-          console.log(`Skipping block ${blockNumber}`);
+          console.log(`Skipping block ${blockNumber}: ${err.message}`);
         }
 
-        if (i % 5 === 0 && i > 0) {
-          await new Promise(resolve => setTimeout(resolve, 100));
+        // Update progress
+        const progress = Math.round(((i + 1) / dataPoints) * 100);
+        setHistoryProgress(progress);
+
+        // Add delay every few requests to avoid rate limiting
+        if (i % 3 === 0 && i > 0) {
+          await new Promise(resolve => setTimeout(resolve, 150));
         }
       }
 
+      console.log(`Successfully fetched ${successfulFetches} data points`);
       setPriceHistory(historicalData);
+      setHistoryProgress(100);
+      
+      if (successfulFetches === 0) {
+        setError('No historical data available for this time range. The pair might be too new.');
+      }
     } catch (err) {
       console.error('Error fetching historical prices:', err);
+      setError(`Failed to fetch price history: ${err.message}`);
+      setPriceHistory([]);
+    } finally {
+      setHistoryProgress(0);
     }
   };
 
@@ -695,7 +767,7 @@ const UniswapV2Interface = () => {
                 className="flex-1 px-4 py-3 border-2 border-gray-300 rounded-xl focus:outline-none focus:border-pink-400 transition-colors"
               />
               <button
-                onClick={fetchPairData}
+                onClick={() => fetchPairData(false)}
                 disabled={visualizeLoading || !provider}
                 className="px-8 py-3 bg-gradient-to-r from-pink-500 to-purple-600 text-white font-semibold rounded-xl hover:from-pink-600 hover:to-purple-700 disabled:opacity-50 transition-all"
               >
@@ -738,21 +810,93 @@ const UniswapV2Interface = () => {
                   </p>
                 </div>
 
-                {priceHistory.length > 0 && (
-                  <div className="bg-gray-50 rounded-2xl p-6 border-2 border-gray-200">
-                    <h3 className="text-2xl font-bold text-gray-800 mb-6">Price History</h3>
+                {/* Time Range Selector */}
+                <div className="bg-gray-50 rounded-2xl p-6 border-2 border-gray-200">
+                  <div className="flex items-center justify-between mb-6">
+                    <h3 className="text-2xl font-bold text-gray-800">Price History</h3>
+                    <div className="flex gap-2">
+                      {['1h', '1d', '1w', '1m', '3m', '6m', 'ytd'].map((range) => (
+                        <button
+                          key={range}
+                          onClick={() => handleTimeRangeChange(range)}
+                          disabled={visualizeLoading}
+                          className={`px-3 py-1.5 rounded-lg font-semibold text-sm transition-all ${
+                            selectedTimeRange === range
+                              ? 'bg-gradient-to-r from-pink-500 to-purple-600 text-white'
+                              : 'bg-white text-gray-700 hover:bg-gray-100'
+                          } disabled:opacity-50`}
+                        >
+                          {range.toUpperCase()}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Progress Bar */}
+                  {historyProgress > 0 && historyProgress < 100 && (
+                    <div className="mb-4">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-sm text-gray-600">Loading historical data...</span>
+                        <span className="text-sm font-semibold text-pink-600">{historyProgress}%</span>
+                      </div>
+                      <div className="w-full bg-gray-200 rounded-full h-2">
+                        <div
+                          className="bg-gradient-to-r from-pink-500 to-purple-600 h-2 rounded-full transition-all duration-300"
+                          style={{ width: `${historyProgress}%` }}
+                        ></div>
+                      </div>
+                    </div>
+                  )}
+
+                  {priceHistory.length > 0 ? (
                     <ResponsiveContainer width="100%" height={400}>
                       <LineChart data={priceHistory}>
                         <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-                        <XAxis dataKey="date" tick={{ fontSize: 12 }} angle={-45} textAnchor="end" height={80} />
-                        <YAxis tick={{ fontSize: 12 }} />
-                        <Tooltip />
+                        <XAxis 
+                          dataKey="date" 
+                          tick={{ fontSize: 11 }} 
+                          angle={-45} 
+                          textAnchor="end" 
+                          height={80}
+                          interval="preserveStartEnd"
+                        />
+                        <YAxis 
+                          tick={{ fontSize: 11 }}
+                          domain={['auto', 'auto']}
+                        />
+                        <Tooltip 
+                          contentStyle={{
+                            backgroundColor: 'rgba(255, 255, 255, 0.95)',
+                            border: '2px solid #e5e7eb',
+                            borderRadius: '8px'
+                          }}
+                          formatter={(value) => [value.toFixed(8), 'Price']}
+                        />
                         <Legend />
-                        <Line type="monotone" dataKey="price" stroke="#ec4899" strokeWidth={3} dot={{ fill: '#ec4899' }} />
+                        <Line 
+                          type="monotone" 
+                          dataKey="price" 
+                          stroke="#ec4899" 
+                          strokeWidth={2.5}
+                          dot={false}
+                          name={`${pairData.token0.symbol}/${pairData.token1.symbol}`}
+                          animationDuration={500}
+                        />
                       </LineChart>
                     </ResponsiveContainer>
-                  </div>
-                )}
+                  ) : visualizeLoading ? (
+                    <div className="flex items-center justify-center h-96">
+                      <div className="text-center">
+                        <div className="inline-block animate-spin rounded-full h-12 w-12 border-b-2 border-pink-600 mb-4"></div>
+                        <p className="text-gray-600">Loading chart data...</p>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="flex items-center justify-center h-96">
+                      <p className="text-gray-500">No historical data available yet. Click a time range above to load.</p>
+                    </div>
+                  )}
+                </div>
               </div>
             )}
           </div>
