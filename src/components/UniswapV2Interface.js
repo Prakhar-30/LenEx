@@ -7,7 +7,7 @@ const CHAIN_CONFIG = {
   sepolia: {
     chainId: 11155111,
     name: 'Sepolia',
-    rpcUrl: 'https://rpc.sepolia.org',
+    rpcUrl: 'https://ethereum-sepolia-rpc.publicnode.com',
     explorerUrl: 'https://sepolia.etherscan.io',
     routerAddress: '0xC532a74256D3Db42D0Bf7a0400fEFDbad7694008',
     factoryAddress: '0x7E0987E5b3a30e3f2828572Bb659A548460a3003',
