@@ -73,7 +73,7 @@ const UniswapV2Interface = () => {
   const [signer, setSigner] = useState(null);
   const [account, setAccount] = useState('');
   const [activeTab, setActiveTab] = useState('swap');
-
+  
   // Swap state
   const [tokenIn, setTokenIn] = useState('');
   const [tokenOut, setTokenOut] = useState('');
@@ -83,28 +83,44 @@ const UniswapV2Interface = () => {
   const [tokenOutData, setTokenOutData] = useState(null);
   const [swapLoading, setSwapLoading] = useState(false);
   const [quoteLoading, setQuoteLoading] = useState(false);
-
+  
   // Visualize state
   const [pairAddress, setPairAddress] = useState('');
   const [pairData, setPairData] = useState(null);
   const [priceHistory, setPriceHistory] = useState([]);
   const [visualizeLoading, setVisualizeLoading] = useState(false);
-
+  
   // Create pair state
   const [tokenA, setTokenA] = useState('');
   const [tokenB, setTokenB] = useState('');
   const [amountA, setAmountA] = useState('');
   const [amountB, setAmountB] = useState('');
   const [createLoading, setCreateLoading] = useState(false);
-
+  
   const [error, setError] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
 
   // Initialize provider based on selected chain
   useEffect(() => {
-    const config = CHAIN_CONFIG[selectedChain];
-    const rpcProvider = new ethers.providers.JsonRpcProvider(config.rpcUrl);
-    setProvider(rpcProvider);
+    const initProvider = async () => {
+      try {
+        const config = CHAIN_CONFIG[selectedChain];
+        // Use ethers v5 syntax for JsonRpcProvider
+        const rpcProvider = new ethers.providers.JsonRpcProvider(config.rpcUrl);
+        
+        // Wait for the provider to detect the network
+        await rpcProvider.getNetwork();
+        
+        setProvider(rpcProvider);
+        setError('');
+        console.log(`Provider initialized for ${config.name}`);
+      } catch (err) {
+        console.error('Provider initialization error:', err);
+        setError(`Failed to connect to ${CHAIN_CONFIG[selectedChain].name}. Please check your internet connection.`);
+      }
+    };
+    
+    initProvider();
   }, [selectedChain]);
 
   // Connect wallet
@@ -116,12 +132,12 @@ const UniswapV2Interface = () => {
       }
 
       const config = CHAIN_CONFIG[selectedChain];
-
+      
       // Request account access
-      const accounts = await window.ethereum.request({
-        method: 'eth_requestAccounts'
+      const accounts = await window.ethereum.request({ 
+        method: 'eth_requestAccounts' 
       });
-
+      
       // Switch to the correct chain
       try {
         await window.ethereum.request({
@@ -146,7 +162,7 @@ const UniswapV2Interface = () => {
 
       const web3Provider = new ethers.providers.Web3Provider(window.ethereum);
       const web3Signer = web3Provider.getSigner();
-
+      
       setSigner(web3Signer);
       setAccount(accounts[0]);
       setError('');
@@ -167,16 +183,16 @@ const UniswapV2Interface = () => {
         tokenContract.symbol(),
         tokenContract.decimals()
       ]);
-
+      
       let balance = '0';
       if (signer && account) {
         balance = await tokenContract.balanceOf(account);
       }
-
-      return {
-        name,
-        symbol,
-        decimals: Number(decimals),
+      
+      return { 
+        name, 
+        symbol, 
+        decimals: Number(decimals), 
         address: tokenAddress,
         balance: ethers.utils.formatUnits(balance, decimals)
       };
@@ -206,11 +222,11 @@ const UniswapV2Interface = () => {
   };
 
   useEffect(() => {
-    if (tokenIn && tokenOut) {
+    if (tokenIn && tokenOut && provider) {
       loadTokenData();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tokenIn, tokenOut, signer, account]);
+  }, [tokenIn, tokenOut, signer, account, provider]);
 
   // Get quote for swap
   const getQuote = async () => {
@@ -220,13 +236,13 @@ const UniswapV2Interface = () => {
     try {
       const config = CHAIN_CONFIG[selectedChain];
       const routerContract = new ethers.Contract(config.routerAddress, ROUTER_ABI, provider);
-
+      
       const amountInWei = ethers.utils.parseUnits(amountIn, tokenInData.decimals);
       const path = [tokenIn, tokenOut];
-
+      
       const amounts = await routerContract.getAmountsOut(amountInWei, path);
       const amountOutValue = ethers.utils.formatUnits(amounts[1], tokenOutData.decimals);
-
+      
       setAmountOut(amountOutValue);
     } catch (err) {
       console.error('Error getting quote:', err);
@@ -237,23 +253,23 @@ const UniswapV2Interface = () => {
   };
 
   useEffect(() => {
-    if (amountIn && tokenInData && tokenOutData) {
+    if (amountIn && tokenInData && tokenOutData && provider) {
       const timer = setTimeout(() => {
         getQuote();
       }, 500);
       return () => clearTimeout(timer);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [amountIn, tokenInData, tokenOutData]);
+  }, [amountIn, tokenInData, tokenOutData, provider]);
 
   // Check and approve token
   const checkAndApprove = async (tokenAddress, amount, decimals) => {
     const config = CHAIN_CONFIG[selectedChain];
     const tokenContract = new ethers.Contract(tokenAddress, ERC20_ABI, signer);
-
+    
     const amountWei = ethers.utils.parseUnits(amount, decimals);
     const allowance = await tokenContract.allowance(account, config.routerAddress);
-
+    
     if (allowance.lt(amountWei)) {
       setSuccessMsg(`Approving ${tokenAddress.slice(0, 6)}...${tokenAddress.slice(-4)}...`);
       const approveTx = await tokenContract.approve(config.routerAddress, ethers.constants.MaxUint256);
@@ -271,20 +287,20 @@ const UniswapV2Interface = () => {
 
     setSwapLoading(true);
     setError('');
-
+    
     try {
       const config = CHAIN_CONFIG[selectedChain];
-
+      
       // Step 1: Approve token
       await checkAndApprove(tokenIn, amountIn, tokenInData.decimals);
-
+      
       // Step 2: Execute swap
       const routerContract = new ethers.Contract(config.routerAddress, ROUTER_ABI, signer);
       const amountInWei = ethers.utils.parseUnits(amountIn, tokenInData.decimals);
       const amountOutMin = ethers.utils.parseUnits((parseFloat(amountOut) * 0.99).toString(), tokenOutData.decimals);
       const path = [tokenIn, tokenOut];
-      const deadline = Math.floor(Date.now() / 1000) + 60 * 20;
-
+      const deadline = Math.floor(Date.now() / 1000) + 60 * 20; // 20 minutes
+      
       setSuccessMsg('Swapping tokens...');
       const swapTx = await routerContract.swapExactTokensForTokens(
         amountInWei,
@@ -293,17 +309,17 @@ const UniswapV2Interface = () => {
         account,
         deadline
       );
-
+      
       const receipt = await swapTx.wait();
       setSuccessMsg(`Swap successful! Tx: ${receipt.transactionHash.slice(0, 10)}...`);
-
+      
       // Reload token balances
       await loadTokenData();
-
+      
       // Clear inputs
       setAmountIn('');
       setAmountOut('');
-
+      
       setTimeout(() => setSuccessMsg(''), 5000);
     } catch (err) {
       console.error('Swap error:', err);
@@ -317,6 +333,11 @@ const UniswapV2Interface = () => {
   const fetchPairData = async () => {
     if (!pairAddress || !ethers.utils.isAddress(pairAddress)) {
       setError('Please enter a valid pair address');
+      return;
+    }
+
+    if (!provider) {
+      setError('Provider not initialized. Please wait or refresh the page.');
       return;
     }
 
@@ -375,13 +396,13 @@ const UniswapV2Interface = () => {
           const reserves = await pairContract.getReserves({ blockTag: blockNumber });
           const reserve0 = parseFloat(ethers.utils.formatUnits(reserves.reserve0, token0Data.decimals));
           const reserve1 = parseFloat(ethers.utils.formatUnits(reserves.reserve1, token1Data.decimals));
-
+          
           if (reserve0 > 0) {
             const price = reserve1 / reserve0;
             const block = await provider.getBlock(blockNumber);
             const timestamp = block.timestamp;
             const date = new Date(timestamp * 1000);
-
+            
             historicalData.unshift({
               date: date.toLocaleDateString(),
               price: price,
@@ -421,7 +442,7 @@ const UniswapV2Interface = () => {
     try {
       const config = CHAIN_CONFIG[selectedChain];
       const factoryContract = new ethers.Contract(config.factoryAddress, FACTORY_ABI, signer);
-
+      
       // Fetch token data
       const [tokenAData, tokenBData] = await Promise.all([
         fetchTokenData(tokenA, signer),
@@ -430,23 +451,23 @@ const UniswapV2Interface = () => {
 
       // Check if pair exists
       let pairAddr = await factoryContract.getPair(tokenA, tokenB);
-
+      
       if (pairAddr === ethers.constants.AddressZero) {
         // Step 1: Create pair
         setSuccessMsg('Creating pair...');
         const createTx = await factoryContract.createPair(tokenA, tokenB);
         const receipt = await createTx.wait();
-
+        
         // Get pair address from event
         const pairCreatedEvent = receipt.logs.find(
           log => log.topics[0] === ethers.utils.id('PairCreated(address,address,address,uint256)')
         );
-
+        
         if (pairCreatedEvent && pairCreatedEvent.data) {
           const decoded = ethers.utils.defaultAbiCoder.decode(['address'], pairCreatedEvent.data);
           pairAddr = decoded[0];
         }
-
+        
         setSuccessMsg(`Pair created: ${pairAddr.slice(0, 10)}...`);
       } else {
         setSuccessMsg('Pair already exists, adding liquidity...');
@@ -478,16 +499,16 @@ const UniswapV2Interface = () => {
 
       const liquidityReceipt = await liquidityTx.wait();
       setSuccessMsg(`Liquidity added! Pair: ${pairAddr}`);
-
+      
       // Set pair address for visualization
       setPairAddress(pairAddr);
-
+      
       // Clear inputs
       setTokenA('');
       setTokenB('');
       setAmountA('');
       setAmountB('');
-
+      
       setTimeout(() => setSuccessMsg(''), 5000);
     } catch (err) {
       console.error('Create pair error:', err);
@@ -511,7 +532,7 @@ const UniswapV2Interface = () => {
                 Uniswap V2 Interface
               </h1>
             </div>
-
+            
             <div className="flex items-center gap-4">
               {/* Chain Selector */}
               <select
@@ -550,7 +571,7 @@ const UniswapV2Interface = () => {
           </div>
         </div>
       )}
-
+      
       {successMsg && (
         <div className="max-w-7xl mx-auto px-6 mt-4">
           <div className="p-4 bg-green-50 border-l-4 border-green-500 text-green-700 rounded-lg">
@@ -585,7 +606,7 @@ const UniswapV2Interface = () => {
           <div className="max-w-md mx-auto">
             <div className="bg-white rounded-3xl shadow-2xl p-6 border border-gray-100">
               <h2 className="text-2xl font-bold mb-6 text-gray-800">Swap Tokens</h2>
-
+              
               {/* Token In */}
               <div className="mb-4">
                 <label className="block text-sm font-medium text-gray-700 mb-2">From</label>
@@ -664,7 +685,7 @@ const UniswapV2Interface = () => {
         {activeTab === 'visualize' && (
           <div className="bg-white rounded-3xl shadow-2xl p-8">
             <h2 className="text-3xl font-bold mb-6 text-gray-800">Visualize Pair</h2>
-
+            
             <div className="flex gap-4 mb-8">
               <input
                 type="text"
@@ -675,7 +696,7 @@ const UniswapV2Interface = () => {
               />
               <button
                 onClick={fetchPairData}
-                disabled={visualizeLoading}
+                disabled={visualizeLoading || !provider}
                 className="px-8 py-3 bg-gradient-to-r from-pink-500 to-purple-600 text-white font-semibold rounded-xl hover:from-pink-600 hover:to-purple-700 disabled:opacity-50 transition-all"
               >
                 {visualizeLoading ? 'Loading...' : 'Analyze'}
@@ -742,7 +763,7 @@ const UniswapV2Interface = () => {
           <div className="max-w-2xl mx-auto">
             <div className="bg-white rounded-3xl shadow-2xl p-8">
               <h2 className="text-3xl font-bold mb-6 text-gray-800">Create Pair & Add Liquidity</h2>
-
+              
               <div className="space-y-6">
                 {/* Token A */}
                 <div>
@@ -792,7 +813,7 @@ const UniswapV2Interface = () => {
 
                 <div className="bg-blue-50 border-l-4 border-blue-400 p-4 rounded">
                   <p className="text-sm text-blue-800">
-                    <strong>Note:</strong> This will create a new pair if it doesn't exist, or add liquidity to an existing pair.
+                    <strong>Note:</strong> This will create a new pair if it doesn't exist, or add liquidity to an existing pair. 
                     Tokens will be approved automatically before adding liquidity.
                   </p>
                 </div>
