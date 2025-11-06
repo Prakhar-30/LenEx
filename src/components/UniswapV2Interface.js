@@ -89,7 +89,7 @@ const UniswapV2Interface = () => {
   const [pairData, setPairData] = useState(null);
   const [priceHistory, setPriceHistory] = useState([]);
   const [visualizeLoading, setVisualizeLoading] = useState(false);
-  const [selectedTimeRange, setSelectedTimeRange] = useState('1w');
+  const [selectedTimeRange, setSelectedTimeRange] = useState('1h');
   const [historyProgress, setHistoryProgress] = useState(0);
   
   // Create pair state
@@ -540,32 +540,32 @@ const UniswapV2Interface = () => {
     }
   };
 
-  const fetchHistoricalPrices = async (pairContract, token0Data, token1Data, timeRange = '1w') => {
+  const fetchHistoricalPrices = async (pairContract, token0Data, token1Data, timeRange = '1h') => {
     try {
       setHistoryProgress(0);
+      setPriceHistory([]); // Clear existing data
       const currentBlock = await provider.getBlockNumber();
       
-      // Calculate blocks based on time range
+      // Optimized time ranges for Sepolia (12 second blocks)
       const timeRangeConfig = {
-        '1h': { blocks: 300, step: 10, label: '1 Hour' },        // ~1 hour (30 data points)
-        '1d': { blocks: 7200, step: 240, label: '1 Day' },       // ~1 day (30 data points)
-        '1w': { blocks: 50400, step: 1680, label: '1 Week' },    // ~1 week (30 data points)
-        '1m': { blocks: 216000, step: 7200, label: '1 Month' },  // ~30 days (30 data points)
-        '3m': { blocks: 648000, step: 21600, label: '3 Months' },// ~90 days (30 data points)
-        '6m': { blocks: 1296000, step: 43200, label: '6 Months' },// ~180 days (30 data points)
-        'ytd': { blocks: 2592000, step: 86400, label: 'Year to Date' } // ~1 year (30 data points)
+        '15m': { blocks: 75, step: 3, label: '15 Minutes', dataPoints: 25 },      // 15 mins
+        '30m': { blocks: 150, step: 6, label: '30 Minutes', dataPoints: 25 },     // 30 mins  
+        '1h': { blocks: 300, step: 12, label: '1 Hour', dataPoints: 25 },         // 1 hour
+        '6h': { blocks: 1800, step: 72, label: '6 Hours', dataPoints: 25 },       // 6 hours
+        '24h': { blocks: 7200, step: 288, label: '24 Hours', dataPoints: 25 },    // 24 hours
       };
 
-      const config = timeRangeConfig[timeRange] || timeRangeConfig['1w'];
+      const config = timeRangeConfig[timeRange] || timeRangeConfig['1h'];
       const totalBlocks = config.blocks;
       const blockStep = config.step;
-      const dataPoints = 30;
+      const dataPoints = config.dataPoints;
 
       const historicalData = [];
       let successfulFetches = 0;
 
       console.log(`Fetching ${config.label} data...`);
 
+      // Fetch data and update chart in real-time
       for (let i = 0; i < dataPoints; i++) {
         const blockNumber = currentBlock - (totalBlocks - (i * blockStep));
         if (blockNumber < 0) break;
@@ -583,18 +583,25 @@ const UniswapV2Interface = () => {
             
             // Format date based on time range
             let dateLabel;
-            if (timeRange === '1h' || timeRange === '1d') {
+            if (timeRange === '15m' || timeRange === '30m') {
+              dateLabel = date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+            } else if (timeRange === '1h' || timeRange === '6h') {
               dateLabel = date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
             } else {
-              dateLabel = date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+              dateLabel = date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
             }
             
-            historicalData.push({
+            const dataPoint = {
               date: dateLabel,
               price: price,
               block: blockNumber,
               timestamp: timestamp
-            });
+            };
+            
+            historicalData.push(dataPoint);
+            
+            // Update chart in real-time with current data
+            setPriceHistory([...historicalData]);
             
             successfulFetches++;
           }
@@ -606,26 +613,85 @@ const UniswapV2Interface = () => {
         const progress = Math.round(((i + 1) / dataPoints) * 100);
         setHistoryProgress(progress);
 
-        // Add delay every few requests to avoid rate limiting
-        if (i % 3 === 0 && i > 0) {
-          await new Promise(resolve => setTimeout(resolve, 150));
+        // Small delay to avoid rate limiting
+        if (i % 2 === 0 && i > 0) {
+          await new Promise(resolve => setTimeout(resolve, 100));
         }
       }
 
       console.log(`Successfully fetched ${successfulFetches} data points`);
-      setPriceHistory(historicalData);
+      
+      // Calculate trend prediction using linear regression
+      if (historicalData.length >= 5) {
+        const predictions = calculateTrendPrediction(historicalData, 2);
+        setPriceHistory([...historicalData, ...predictions]);
+      }
+      
       setHistoryProgress(100);
       
       if (successfulFetches === 0) {
         setError('No historical data available for this time range. The pair might be too new.');
       }
+      
+      // Clear progress after a delay
+      setTimeout(() => setHistoryProgress(0), 1000);
     } catch (err) {
       console.error('Error fetching historical prices:', err);
       setError(`Failed to fetch price history: ${err.message}`);
       setPriceHistory([]);
-    } finally {
       setHistoryProgress(0);
     }
+  };
+
+  // Linear regression for trend prediction
+  const calculateTrendPrediction = (data, forecastPoints = 2) => {
+    if (data.length < 2) return [];
+    
+    // Use last 10 points for trend calculation
+    const recentData = data.slice(-10);
+    const n = recentData.length;
+    
+    // Calculate linear regression
+    let sumX = 0, sumY = 0, sumXY = 0, sumX2 = 0;
+    
+    recentData.forEach((point, index) => {
+      sumX += index;
+      sumY += point.price;
+      sumXY += index * point.price;
+      sumX2 += index * index;
+    });
+    
+    const slope = (n * sumXY - sumX * sumY) / (n * sumX2 - sumX * sumX);
+    const intercept = (sumY - slope * sumX) / n;
+    
+    // Generate predictions
+    const predictions = [];
+    const lastTimestamp = data[data.length - 1].timestamp;
+    const timeStep = (data[data.length - 1].timestamp - data[data.length - 2].timestamp);
+    
+    for (let i = 1; i <= forecastPoints; i++) {
+      const predictedPrice = slope * (n + i - 1) + intercept;
+      const predictedTimestamp = lastTimestamp + (timeStep * i);
+      const predictedDate = new Date(predictedTimestamp * 1000);
+      
+      let dateLabel;
+      if (data[0].date.includes(':') && data[0].date.split(':').length === 3) {
+        dateLabel = predictedDate.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      } else {
+        dateLabel = predictedDate.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+      }
+      
+      predictions.push({
+        date: dateLabel,
+        price: null, // Actual price is null for predictions
+        predictedPrice: predictedPrice > 0 ? predictedPrice : 0,
+        block: null,
+        timestamp: predictedTimestamp,
+        isPrediction: true
+      });
+    }
+    
+    return predictions;
   };
 
   // Create pair and add liquidity
@@ -1036,7 +1102,7 @@ const UniswapV2Interface = () => {
                   <div className="flex items-center justify-between mb-6">
                     <h3 className="text-2xl font-bold text-gray-800">Price History</h3>
                     <div className="flex gap-2">
-                      {['1h', '1d', '1w', '1m', '3m', '6m', 'ytd'].map((range) => (
+                      {['15m', '30m', '1h', '6h', '24h'].map((range) => (
                         <button
                           key={range}
                           onClick={() => handleTimeRangeChange(range)}
@@ -1050,6 +1116,21 @@ const UniswapV2Interface = () => {
                           {range.toUpperCase()}
                         </button>
                       ))}
+                      <button
+                        onClick={() => {
+                          if (pairData && pairData.pairContract) {
+                            handleTimeRangeChange(selectedTimeRange);
+                          }
+                        }}
+                        disabled={visualizeLoading || !pairData}
+                        className="px-3 py-1.5 rounded-lg font-semibold text-sm bg-blue-500 text-white hover:bg-blue-600 disabled:opacity-50 transition-all flex items-center gap-1"
+                        title="Reload chart"
+                      >
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                        </svg>
+                        Reload
+                      </button>
                     </div>
                   </div>
 
@@ -1057,7 +1138,7 @@ const UniswapV2Interface = () => {
                   {historyProgress > 0 && historyProgress < 100 && (
                     <div className="mb-4">
                       <div className="flex items-center justify-between mb-2">
-                        <span className="text-sm text-gray-600">Loading historical data...</span>
+                        <span className="text-sm text-gray-600">Loading historical data... ({Math.round((priceHistory.filter(p => !p.isPrediction).length / 25) * 100)}%)</span>
                         <span className="text-sm font-semibold text-pink-600">{historyProgress}%</span>
                       </div>
                       <div className="w-full bg-gray-200 rounded-full h-2">
@@ -1070,41 +1151,71 @@ const UniswapV2Interface = () => {
                   )}
 
                   {priceHistory.length > 0 ? (
-                    <ResponsiveContainer width="100%" height={400}>
-                      <LineChart data={priceHistory}>
-                        <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-                        <XAxis 
-                          dataKey="date" 
-                          tick={{ fontSize: 11 }} 
-                          angle={-45} 
-                          textAnchor="end" 
-                          height={80}
-                          interval="preserveStartEnd"
-                        />
-                        <YAxis 
-                          tick={{ fontSize: 11 }}
-                          domain={['auto', 'auto']}
-                        />
-                        <Tooltip 
-                          contentStyle={{
-                            backgroundColor: 'rgba(255, 255, 255, 0.95)',
-                            border: '2px solid #e5e7eb',
-                            borderRadius: '8px'
-                          }}
-                          formatter={(value) => [value.toFixed(8), 'Price']}
-                        />
-                        <Legend />
-                        <Line 
-                          type="monotone" 
-                          dataKey="price" 
-                          stroke="#ec4899" 
-                          strokeWidth={2.5}
-                          dot={false}
-                          name={`${pairData.token0.symbol}/${pairData.token1.symbol}`}
-                          animationDuration={500}
-                        />
-                      </LineChart>
-                    </ResponsiveContainer>
+                    <div className={`transition-all duration-500 ${historyProgress > 0 && historyProgress < 100 ? 'opacity-60 blur-sm' : 'opacity-100 blur-0'}`}>
+                      <ResponsiveContainer width="100%" height={400}>
+                        <LineChart data={priceHistory}>
+                          <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                          <XAxis 
+                            dataKey="date" 
+                            tick={{ fontSize: 10 }} 
+                            angle={-45} 
+                            textAnchor="end" 
+                            height={90}
+                            interval="preserveStartEnd"
+                          />
+                          <YAxis 
+                            tick={{ fontSize: 11 }}
+                            domain={['auto', 'auto']}
+                            tickFormatter={(value) => value.toFixed(8)}
+                          />
+                          <Tooltip 
+                            contentStyle={{
+                              backgroundColor: 'rgba(255, 255, 255, 0.95)',
+                              border: '2px solid #e5e7eb',
+                              borderRadius: '8px',
+                              padding: '8px'
+                            }}
+                            formatter={(value, name) => {
+                              if (name.includes('Actual')) {
+                                return [value ? value.toFixed(8) : 'N/A', 'Price'];
+                              } else {
+                                return [value ? value.toFixed(8) : 'N/A', 'Predicted'];
+                              }
+                            }}
+                            labelFormatter={(label) => `Time: ${label}`}
+                          />
+                          <Legend />
+                          {/* Actual Price Line */}
+                          <Line 
+                            type="monotone" 
+                            dataKey="price" 
+                            stroke="#ec4899" 
+                            strokeWidth={2.5}
+                            dot={false}
+                            name={`${pairData.token0.symbol}/${pairData.token1.symbol} (Actual)`}
+                            animationDuration={300}
+                            connectNulls={false}
+                          />
+                          {/* Predicted Price Line */}
+                          <Line 
+                            type="monotone" 
+                            dataKey="predictedPrice" 
+                            stroke="#9333ea" 
+                            strokeWidth={2}
+                            strokeDasharray="5 5"
+                            dot={{ fill: '#9333ea', r: 3 }}
+                            name="Trend Prediction"
+                            animationDuration={300}
+                            connectNulls={false}
+                          />
+                        </LineChart>
+                      </ResponsiveContainer>
+                      {priceHistory.some(p => p.isPrediction) && (
+                        <div className="mt-4 text-xs text-gray-600 bg-purple-50 p-3 rounded-lg border border-purple-200">
+                          <span className="font-semibold text-purple-700">📊 Trend Prediction:</span> The dotted purple line shows predicted price movement based on linear regression of the last 10 data points. This is a simple trend indicator, not financial advice.
+                        </div>
+                      )}
+                    </div>
                   ) : visualizeLoading ? (
                     <div className="flex items-center justify-center h-96">
                       <div className="text-center">
