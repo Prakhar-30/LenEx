@@ -7,6 +7,7 @@ import Swap from './pages/Swap';
 import Liquidity from './pages/Liquidity';
 import Lending from './pages/Lending';
 import Pools from './pages/Pools';
+import UniswapV2 from './pages/UniswapV2';
 
 function App() {
   return (
@@ -20,6 +21,7 @@ function App() {
             <Route path="/swap" element={<Swap />} />
             <Route path="/liquidity" element={<Liquidity />} />
             <Route path="/lending" element={<Lending />} />
+            <Route path="/uniswap-v2" element={<UniswapV2 />} />
           </Routes>
         </main>
         

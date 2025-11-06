@@ -14,7 +14,8 @@ const Header = () => {
     { name: 'Pools', path: '/pools' },
     { name: 'Swap', path: '/swap' },
     { name: 'Liquidity', path: '/liquidity' },
-    { name: 'Lending', path: '/lending' }
+    { name: 'Lending', path: '/lending' },
+    { name: 'Uniswap V2', path: '/uniswap-v2' }
   ];
 
   const isWrongNetwork = chainId && chainId !== CHAIN_IDS.SEPOLIA;
