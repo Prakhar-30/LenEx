@@ -7,7 +7,7 @@ const CHAIN_CONFIG = {
   sepolia: {
     chainId: 11155111,
     name: 'Sepolia',
-    rpcUrl: 'https://ethereum-sepolia-rpc.publicnode.com',
+    rpcUrl: 'https://rpc.sepolia.org',
     explorerUrl: 'https://sepolia.etherscan.io',
     routerAddress: '0xC532a74256D3Db42D0Bf7a0400fEFDbad7694008',
     factoryAddress: '0x7E0987E5b3a30e3f2828572Bb659A548460a3003',
@@ -239,16 +239,34 @@ const UniswapV2Interface = () => {
       const config = CHAIN_CONFIG[selectedChain];
       const routerContract = new ethers.Contract(config.routerAddress, ROUTER_ABI, provider);
       
-      const amountInWei = ethers.utils.parseUnits(amountIn, tokenInData.decimals);
+      // Clean the amount to match token decimals
+      const amountInCleaned = parseFloat(amountIn).toFixed(tokenInData.decimals);
+      const amountInWei = ethers.utils.parseUnits(amountInCleaned, tokenInData.decimals);
+      
+      // Check if amount is too small
+      if (amountInWei.isZero()) {
+        setAmountOut('0');
+        setQuoteLoading(false);
+        return;
+      }
+      
       const path = [tokenIn, tokenOut];
       
       const amounts = await routerContract.getAmountsOut(amountInWei, path);
+      
+      // Format output amount
       const amountOutValue = ethers.utils.formatUnits(amounts[1], tokenOutData.decimals);
       
       setAmountOut(amountOutValue);
     } catch (err) {
       console.error('Error getting quote:', err);
-      setAmountOut('0');
+      
+      if (err.message.includes('INSUFFICIENT_LIQUIDITY') || err.message.includes('INSUFFICIENT_INPUT_AMOUNT')) {
+        setAmountOut('0');
+        // Don't show error here, will show when user tries to swap
+      } else {
+        setAmountOut('0');
+      }
     } finally {
       setQuoteLoading(false);
     }
@@ -266,17 +284,38 @@ const UniswapV2Interface = () => {
 
   // Check and approve token
   const checkAndApprove = async (tokenAddress, amount, decimals) => {
-    const config = CHAIN_CONFIG[selectedChain];
-    const tokenContract = new ethers.Contract(tokenAddress, ERC20_ABI, signer);
-    
-    const amountWei = ethers.utils.parseUnits(amount, decimals);
-    const allowance = await tokenContract.allowance(account, config.routerAddress);
-    
-    if (allowance.lt(amountWei)) {
-      setSuccessMsg(`Approving ${tokenAddress.slice(0, 6)}...${tokenAddress.slice(-4)}...`);
-      const approveTx = await tokenContract.approve(config.routerAddress, ethers.constants.MaxUint256);
-      await approveTx.wait();
-      setSuccessMsg('Approval successful!');
+    try {
+      const config = CHAIN_CONFIG[selectedChain];
+      const tokenContract = new ethers.Contract(tokenAddress, ERC20_ABI, signer);
+      
+      // Clean amount to match decimals
+      const amountCleaned = parseFloat(amount).toFixed(decimals);
+      const amountWei = ethers.utils.parseUnits(amountCleaned, decimals);
+      
+      const allowance = await tokenContract.allowance(account, config.routerAddress);
+      
+      if (allowance.lt(amountWei)) {
+        setSuccessMsg(`Approving ${tokenAddress.slice(0, 6)}...${tokenAddress.slice(-4)}...`);
+        
+        const approveTx = await tokenContract.approve(config.routerAddress, ethers.constants.MaxUint256);
+        setSuccessMsg('Waiting for approval confirmation...');
+        
+        await approveTx.wait();
+        setSuccessMsg('Approval successful!');
+        
+        // Wait a bit for the approval to propagate
+        await new Promise(resolve => setTimeout(resolve, 2000));
+      }
+    } catch (err) {
+      console.error('Approval error:', err);
+      
+      if (err.message.includes('user rejected') || err.code === 4001) {
+        throw new Error('Approval rejected by user');
+      } else if (err.message.includes('insufficient funds')) {
+        throw new Error('Insufficient ETH for gas fees');
+      } else {
+        throw new Error(`Approval failed: ${err.message.split('(')[0].trim()}`);
+      }
     }
   };
 
@@ -287,6 +326,24 @@ const UniswapV2Interface = () => {
       return;
     }
 
+    // Validate amountIn
+    if (isNaN(parseFloat(amountIn)) || parseFloat(amountIn) <= 0) {
+      setError('Please enter a valid amount greater than 0');
+      return;
+    }
+
+    // Check if user has enough balance
+    if (parseFloat(amountIn) > parseFloat(tokenInData.balance)) {
+      setError(`Insufficient ${tokenInData.symbol} balance. You have ${parseFloat(tokenInData.balance).toFixed(4)}`);
+      return;
+    }
+
+    // Validate amountOut
+    if (!amountOut || parseFloat(amountOut) <= 0) {
+      setError('Unable to get quote. Please try again or check if liquidity exists for this pair.');
+      return;
+    }
+
     setSwapLoading(true);
     setError('');
     
@@ -294,29 +351,98 @@ const UniswapV2Interface = () => {
       const config = CHAIN_CONFIG[selectedChain];
       
       // Step 1: Approve token
+      setSuccessMsg(`Approving ${tokenInData.symbol}...`);
       await checkAndApprove(tokenIn, amountIn, tokenInData.decimals);
       
       // Step 2: Execute swap
       const routerContract = new ethers.Contract(config.routerAddress, ROUTER_ABI, signer);
-      const amountInWei = ethers.utils.parseUnits(amountIn, tokenInData.decimals);
-      const amountOutMin = ethers.utils.parseUnits((parseFloat(amountOut) * 0.99).toString(), tokenOutData.decimals);
+      
+      // Parse amounts with proper decimal handling
+      let amountInWei;
+      let amountOutMin;
+      
+      try {
+        // Ensure amountIn doesn't have more decimals than token supports
+        const amountInCleaned = parseFloat(amountIn).toFixed(tokenInData.decimals);
+        amountInWei = ethers.utils.parseUnits(amountInCleaned, tokenInData.decimals);
+      } catch (err) {
+        setError(`Invalid input amount: Token ${tokenInData.symbol} only supports ${tokenInData.decimals} decimal places`);
+        setSwapLoading(false);
+        return;
+      }
+
+      try {
+        // Calculate minimum output with 1% slippage
+        const amountOutFloat = parseFloat(amountOut);
+        const minOutputFloat = amountOutFloat * 0.99;
+        
+        // Ensure amountOut doesn't have more decimals than token supports
+        const amountOutCleaned = minOutputFloat.toFixed(tokenOutData.decimals);
+        amountOutMin = ethers.utils.parseUnits(amountOutCleaned, tokenOutData.decimals);
+        
+        // Check if minimum output is greater than 0
+        if (amountOutMin.isZero()) {
+          setError('Output amount too small. Try increasing the input amount.');
+          setSwapLoading(false);
+          return;
+        }
+      } catch (err) {
+        setError(`Invalid output amount: Token ${tokenOutData.symbol} only supports ${tokenOutData.decimals} decimal places`);
+        setSwapLoading(false);
+        return;
+      }
+
       const path = [tokenIn, tokenOut];
       const deadline = Math.floor(Date.now() / 1000) + 60 * 20; // 20 minutes
       
       setSuccessMsg('Swapping tokens...');
-      const swapTx = await routerContract.swapExactTokensForTokens(
-        amountInWei,
-        amountOutMin,
-        path,
-        account,
-        deadline
-      );
+      
+      let swapTx;
+      try {
+        swapTx = await routerContract.swapExactTokensForTokens(
+          amountInWei,
+          amountOutMin,
+          path,
+          account,
+          deadline
+        );
+      } catch (err) {
+        console.error('Transaction error:', err);
+        
+        // Parse common error messages
+        if (err.message.includes('insufficient')) {
+          setError('Insufficient liquidity for this trade. Try a smaller amount.');
+        } else if (err.message.includes('K')) {
+          setError('Invalid trade: Would violate constant product formula.');
+        } else if (err.message.includes('EXPIRED')) {
+          setError('Transaction deadline expired. Please try again.');
+        } else if (err.message.includes('user rejected')) {
+          setError('Transaction rejected by user.');
+        } else if (err.code === 4001) {
+          setError('Transaction rejected by user.');
+        } else if (err.message.includes('gas')) {
+          setError('Transaction would fail. Possible reasons: insufficient liquidity, high slippage, or gas issues.');
+        } else {
+          setError(`Transaction failed: ${err.message.split('(')[0].trim()}`);
+        }
+        
+        setSwapLoading(false);
+        return;
+      }
+      
+      setSuccessMsg('Waiting for confirmation...');
       
       const receipt = await swapTx.wait();
       setSuccessMsg(`Swap successful! Tx: ${receipt.transactionHash.slice(0, 10)}...`);
       
       // Reload token balances
-      await loadTokenData();
+      setTimeout(async () => {
+        try {
+          await loadTokenData();
+        } catch (err) {
+          console.error('Error reloading balances:', err);
+        }
+      }, 2000);
       
       // Clear inputs
       setAmountIn('');
@@ -325,7 +451,13 @@ const UniswapV2Interface = () => {
       setTimeout(() => setSuccessMsg(''), 5000);
     } catch (err) {
       console.error('Swap error:', err);
-      setError(`Swap failed: ${err.message}`);
+      
+      if (err.message.includes('insufficient funds')) {
+        setError('Insufficient ETH for gas fees. Please add ETH to your wallet.');
+      } else if (!err.message.includes('Transaction')) {
+        // Only show generic error if we haven't already set a specific error
+        setError(`Swap failed: ${err.message}`);
+      }
     } finally {
       setSwapLoading(false);
     }
@@ -508,6 +640,22 @@ const UniswapV2Interface = () => {
       return;
     }
 
+    if (tokenA.toLowerCase() === tokenB.toLowerCase()) {
+      setError('Token A and Token B must be different');
+      return;
+    }
+
+    // Validate amounts
+    if (isNaN(parseFloat(amountA)) || parseFloat(amountA) <= 0) {
+      setError('Please enter a valid amount for Token A');
+      return;
+    }
+
+    if (isNaN(parseFloat(amountB)) || parseFloat(amountB) <= 0) {
+      setError('Please enter a valid amount for Token B');
+      return;
+    }
+
     setCreateLoading(true);
     setError('');
 
@@ -516,10 +664,24 @@ const UniswapV2Interface = () => {
       const factoryContract = new ethers.Contract(config.factoryAddress, FACTORY_ABI, signer);
       
       // Fetch token data
+      setSuccessMsg('Loading token information...');
       const [tokenAData, tokenBData] = await Promise.all([
         fetchTokenData(tokenA, signer),
         fetchTokenData(tokenB, signer)
       ]);
+
+      // Check balances
+      if (parseFloat(amountA) > parseFloat(tokenAData.balance)) {
+        setError(`Insufficient ${tokenAData.symbol} balance. You have ${parseFloat(tokenAData.balance).toFixed(4)}`);
+        setCreateLoading(false);
+        return;
+      }
+
+      if (parseFloat(amountB) > parseFloat(tokenBData.balance)) {
+        setError(`Insufficient ${tokenBData.symbol} balance. You have ${parseFloat(tokenBData.balance).toFixed(4)}`);
+        setCreateLoading(false);
+        return;
+      }
 
       // Check if pair exists
       let pairAddr = await factoryContract.getPair(tokenA, tokenB);
@@ -527,64 +689,123 @@ const UniswapV2Interface = () => {
       if (pairAddr === ethers.constants.AddressZero) {
         // Step 1: Create pair
         setSuccessMsg('Creating pair...');
-        const createTx = await factoryContract.createPair(tokenA, tokenB);
-        const receipt = await createTx.wait();
         
-        // Get pair address from event
-        const pairCreatedEvent = receipt.logs.find(
-          log => log.topics[0] === ethers.utils.id('PairCreated(address,address,address,uint256)')
-        );
-        
-        if (pairCreatedEvent && pairCreatedEvent.data) {
-          const decoded = ethers.utils.defaultAbiCoder.decode(['address'], pairCreatedEvent.data);
-          pairAddr = decoded[0];
+        try {
+          const createTx = await factoryContract.createPair(tokenA, tokenB);
+          setSuccessMsg('Waiting for pair creation...');
+          const receipt = await createTx.wait();
+          
+          // Get pair address from event
+          const pairCreatedEvent = receipt.logs.find(
+            log => log.topics[0] === ethers.utils.id('PairCreated(address,address,address,uint256)')
+          );
+          
+          if (pairCreatedEvent && pairCreatedEvent.data) {
+            const decoded = ethers.utils.defaultAbiCoder.decode(['address'], pairCreatedEvent.data);
+            pairAddr = decoded[0];
+          } else {
+            // Fallback: query the factory again
+            pairAddr = await factoryContract.getPair(tokenA, tokenB);
+          }
+          
+          setSuccessMsg(`Pair created: ${pairAddr.slice(0, 10)}...`);
+          await new Promise(resolve => setTimeout(resolve, 2000));
+        } catch (err) {
+          console.error('Create pair error:', err);
+          
+          if (err.message.includes('user rejected') || err.code === 4001) {
+            setError('Pair creation rejected by user');
+          } else if (err.message.includes('IDENTICAL_ADDRESSES')) {
+            setError('Cannot create pair with identical token addresses');
+          } else if (err.message.includes('PAIR_EXISTS')) {
+            setError('Pair already exists');
+          } else {
+            setError(`Failed to create pair: ${err.message.split('(')[0].trim()}`);
+          }
+          setCreateLoading(false);
+          return;
         }
-        
-        setSuccessMsg(`Pair created: ${pairAddr.slice(0, 10)}...`);
       } else {
         setSuccessMsg('Pair already exists, adding liquidity...');
       }
 
       // Step 2: Approve both tokens
-      await checkAndApprove(tokenA, amountA, tokenAData.decimals);
-      await checkAndApprove(tokenB, amountB, tokenBData.decimals);
+      try {
+        setSuccessMsg(`Approving ${tokenAData.symbol}...`);
+        await checkAndApprove(tokenA, amountA, tokenAData.decimals);
+        
+        setSuccessMsg(`Approving ${tokenBData.symbol}...`);
+        await checkAndApprove(tokenB, amountB, tokenBData.decimals);
+      } catch (err) {
+        setError(err.message);
+        setCreateLoading(false);
+        return;
+      }
 
       // Step 3: Add liquidity
-      const routerContract = new ethers.Contract(config.routerAddress, ROUTER_ABI, signer);
-      const amountAWei = ethers.utils.parseUnits(amountA, tokenAData.decimals);
-      const amountBWei = ethers.utils.parseUnits(amountB, tokenBData.decimals);
-      const amountAMin = ethers.utils.parseUnits((parseFloat(amountA) * 0.99).toString(), tokenAData.decimals);
-      const amountBMin = ethers.utils.parseUnits((parseFloat(amountB) * 0.99).toString(), tokenBData.decimals);
-      const deadline = Math.floor(Date.now() / 1000) + 60 * 20;
+      try {
+        const routerContract = new ethers.Contract(config.routerAddress, ROUTER_ABI, signer);
+        
+        // Clean amounts to match decimals
+        const amountACleaned = parseFloat(amountA).toFixed(tokenAData.decimals);
+        const amountBCleaned = parseFloat(amountB).toFixed(tokenBData.decimals);
+        
+        const amountAWei = ethers.utils.parseUnits(amountACleaned, tokenAData.decimals);
+        const amountBWei = ethers.utils.parseUnits(amountBCleaned, tokenBData.decimals);
+        const amountAMin = ethers.utils.parseUnits((parseFloat(amountACleaned) * 0.99).toFixed(tokenAData.decimals), tokenAData.decimals);
+        const amountBMin = ethers.utils.parseUnits((parseFloat(amountBCleaned) * 0.99).toFixed(tokenBData.decimals), tokenBData.decimals);
+        const deadline = Math.floor(Date.now() / 1000) + 60 * 20;
 
-      setSuccessMsg('Adding liquidity...');
-      const liquidityTx = await routerContract.addLiquidity(
-        tokenA,
-        tokenB,
-        amountAWei,
-        amountBWei,
-        amountAMin,
-        amountBMin,
-        account,
-        deadline
-      );
+        setSuccessMsg('Adding liquidity...');
+        const liquidityTx = await routerContract.addLiquidity(
+          tokenA,
+          tokenB,
+          amountAWei,
+          amountBWei,
+          amountAMin,
+          amountBMin,
+          account,
+          deadline
+        );
 
-      const liquidityReceipt = await liquidityTx.wait();
-      setSuccessMsg(`Liquidity added! Pair: ${pairAddr}`);
-      
-      // Set pair address for visualization
-      setPairAddress(pairAddr);
-      
-      // Clear inputs
-      setTokenA('');
-      setTokenB('');
-      setAmountA('');
-      setAmountB('');
-      
-      setTimeout(() => setSuccessMsg(''), 5000);
+        setSuccessMsg('Waiting for confirmation...');
+        const liquidityReceipt = await liquidityTx.wait();
+        setSuccessMsg(`Liquidity added! Pair: ${pairAddr}`);
+        
+        // Set pair address for visualization
+        setPairAddress(pairAddr);
+        
+        // Clear inputs
+        setTokenA('');
+        setTokenB('');
+        setAmountA('');
+        setAmountB('');
+        
+        setTimeout(() => {
+          setSuccessMsg('');
+          setActiveTab('visualize');
+        }, 3000);
+      } catch (err) {
+        console.error('Add liquidity error:', err);
+        
+        if (err.message.includes('user rejected') || err.code === 4001) {
+          setError('Add liquidity rejected by user');
+        } else if (err.message.includes('INSUFFICIENT_A_AMOUNT') || err.message.includes('INSUFFICIENT_B_AMOUNT')) {
+          setError('Insufficient token amounts. The ratio may have changed. Try adjusting your amounts.');
+        } else if (err.message.includes('insufficient funds')) {
+          setError('Insufficient ETH for gas fees');
+        } else {
+          setError(`Failed to add liquidity: ${err.message.split('(')[0].trim()}`);
+        }
+        setCreateLoading(false);
+        return;
+      }
     } catch (err) {
       console.error('Create pair error:', err);
-      setError(`Failed: ${err.message}`);
+      
+      if (!error) { // Only set error if not already set
+        setError(`Failed: ${err.message}`);
+      }
     } finally {
       setCreateLoading(false);
     }
